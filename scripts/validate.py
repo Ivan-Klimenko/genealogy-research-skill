@@ -15,7 +15,7 @@ data/hypotheses.yaml, data/research_queue.yaml.
 import json
 import re
 import sys
-from collections import Counter, defaultdict
+from collections import Counter, defaultdict, deque
 from pathlib import Path
 
 import yaml
@@ -103,9 +103,14 @@ for label, items in (("people", people), ("relationships", rels),
 PERSON_FIELDS = ["id", "name_ru", "name_full", "gender", "patronymic", "maiden_name",
                  "birth_date", "birth_place", "death_date", "death_cause", "occupation",
                  "generation", "role", "stub", "visible", "research_priority",
-                 "spouse_name", "siblings",
                  "military_service", "rank", "awards", "sources", "confidence", "notes",
                  "biography", "research_wishes"]
+
+# Поля, снятые 2026-08-04: производные от рёбер и набранные руками. `siblings`
+# успел разойтись с sibling-рёбрами у 19 человек из 25, а `spouse_name` у девяти
+# прятал от графа настоящих людей — супругов, известных по документу, но не имевших
+# ни узла, ни источника, ни задачи. Всё перенесено в узлы и рёбра.
+BANNED_PERSON_FIELDS = ["spouse_name", "siblings"]
 
 MAX_PRIORITY = 5   # 0 — исследования не ведётся, 1 — двигает дерево прямо сейчас
 
@@ -113,6 +118,10 @@ for p in people:
     missing = [f for f in PERSON_FIELDS if f not in p]
     if missing:
         errors.append(f"person {p['id']}: нет полей {missing}")
+    banned = [f for f in BANNED_PERSON_FIELDS if f in p]
+    if banned:
+        errors.append(f"person {p['id']}: поля {banned} сняты — родство живёт "
+                      "в relationships, а не в карточке человека")
     if not isinstance(p.get("stub"), bool):
         errors.append(f"person {p['id']}: stub не булев ({p.get('stub')!r})")
     # --- visible / research_priority (введены 2026-08-02) -------------------
@@ -208,6 +217,12 @@ for r in rels:
     for h in r.get("hypotheses", []):
         if h not in hids:
             errors.append(f"relationship {rid}: hypotheses -> несуществующая {h}")
+    # Основание неуверенности обязано быть объектом, а не прозой. «probable, потому
+    # что так написано в notes» не попадает ни в цену ошибки, ни в очередь задач:
+    # именно так самая дорогая развилка проекта не показывалась в STATUS.md вовсе.
+    if r.get("confidence") != "confirmed" and not r.get("hypotheses"):
+        errors.append(f"relationship {rid}: confidence={r.get('confidence')}, "
+                      "но нет ни одной гипотезы — почему связь слабая, знает только проза")
     if "notes" not in r:
         errors.append(f"relationship {rid}: нет поля notes")
 
@@ -250,11 +265,6 @@ for r in active:
         errors.append(f"relationship {r['id']}: parent_role=father, но {par['id']} не мужчина")
     if role == "mother" and par["gender"] != "female":
         errors.append(f"relationship {r['id']}: parent_role=mother, но {par['id']} не женщина")
-    if isinstance(par.get("generation"), int) and isinstance(chi.get("generation"), int):
-        if par["generation"] != chi["generation"] + 1:
-            warnings.append(f"relationship {r['id']}: поколения {par['id']}="
-                            f"{par['generation']} и {chi['id']}={chi['generation']} "
-                            f"не соседние (в графе это допустимо, но проверьте раскладку)")
     py, pa = year_of(par.get("birth_date"))
     cy, ca = year_of(chi.get("birth_date"))
     if py and cy:
@@ -368,11 +378,6 @@ for pid in sorted(hidden - shown):
                   f"ни разу")
 
 # --- поле siblings: если там id, он должен существовать --------------------
-for p in people:
-    for s in p.get("siblings") or []:
-        if isinstance(s, str) and re.fullmatch(r"[a-z0-9_]+", s) and s not in pids:
-            errors.append(f"person {p['id']}: siblings -> несуществующий id {s}")
-
 # ===========================================================================
 # СПИСКИ ЖЕЛАНИЙ (research_wishes)
 # ===========================================================================
@@ -538,6 +543,15 @@ for h in hyps["hypotheses"]:
             errors.append(f"hyp {h['id']}: status={h['status']}, но заполнено resolution/date_resolved")
     if not h.get("evidence_for") and not h.get("evidence_against"):
         warnings.append(f"hyp {h['id']}: нет свидетельств ни за, ни против")
+    # Одно поле — одно имя. Три синонима («resolves_with», «resolution_plan»,
+    # «how_to_resolve») жили одновременно, а витрина читала самый редкий из них,
+    # и 104 гипотезы из 109 молча печатались без строки «что решает».
+    for alias in ("resolves_with", "resolution_plan"):
+        if alias in h:
+            errors.append(f"hyp {h['id']}: поле {alias} — устаревшее имя how_to_resolve")
+    if h["status"] in ("open", "needs_verification") and not h.get("how_to_resolve"):
+        errors.append(f"hyp {h['id']}: status={h['status']}, но нет how_to_resolve — "
+                      "версия, которую нечем проверить, не порождает задачу")
 
 # отклонённая гипотеза не должна держать связи в графе
 rejected_hyps = {h["id"] for h in hyps["hypotheses"] if h["status"] == "rejected"}
@@ -546,6 +560,24 @@ for r in active:
         if h in rejected_hyps:
             errors.append(f"relationship {r['id']}: ссылается на отклонённую гипотезу {h} — "
                           f"связь должна быть пересмотрена или снята")
+
+# --- ссылка гипотеза → ребро односторонняя ---------------------------------
+# Гипотеза называет rel_NNN в тексте, а ребро её не называет. Упоминание НЕ равно
+# зависимости — гипотеза может ссылаться на ребро исторически, — поэтому это
+# предупреждение, а не ошибка. Но именно так hyp_053 выпала из таблицы цены ошибки,
+# хотя без неё девять человек перестают быть предками.
+_rel_ids = {r["id"] for r in rels}
+_rel_hyps = {r["id"]: set(r.get("hypotheses") or []) for r in rels}
+_asym = []
+for h in hyps["hypotheses"]:
+    if h["status"] == "rejected":
+        continue                      # отклонённая и не должна держать рёбра
+    for rid in sorted(set(re.findall(r"rel_\d+", json.dumps(h, ensure_ascii=False)))):
+        if rid in _rel_ids and h["id"] not in _rel_hyps[rid]:
+            _asym.append(f"{h['id']}→{rid}")
+if _asym:
+    warnings.append("гипотеза называет ребро, ребро её не называет: "
+                    + ", ".join(_asym) + " — если это зависимость, впиши в hypotheses ребра")
 
 QUEUE_STATUSES = ("pending", "in_progress", "done", "blocked", "cancelled")
 # channel — КАКИМ СПОСОБОМ задача вообще выполнима. Введён 2026-08-03, потому что
@@ -771,6 +803,43 @@ if gmeta.get("schema_version") != 2:
 
 frontiers = sorted(p["id"] for p in people if not parents_of.get(p["id"]))
 
+# --- `generation` ВЫЧИСЛЯЕТСЯ, а не назначается ----------------------------
+# Третье производное поле после счётчиков и `visible`, снятое с ручного ведения
+# (2026-08-04). Поколение целиком выводится из рёбер: родитель на единицу старше
+# ребёнка, супруги и родные братья — ровно одного. Достаточно закрепить корень.
+#
+# Раньше расхождение печаталось предупреждением на каждое ребро в отдельности,
+# и предупреждение «супруги из разных поколений» шло в каждом прогоне месяцами,
+# пока за ним не обнаружились двое бывших предков с поколениями 7 и 6 при мужьях
+# 4 и 3. Теперь противоречие внутри самого графа — ОШИБКА, потому что оно означает
+# не «раскладка некрасивая», а «рёбра между собой несовместимы».
+_gen, _q, _gconf = {ROOT: by_id[ROOT].get("generation", 0)}, deque([ROOT]), []
+_gadj = defaultdict(list)
+for r in active:
+    if r["type"] == "parent_child":
+        _gadj[r["parent"]].append((r["child"], -1))
+        _gadj[r["child"]].append((r["parent"], +1))
+    else:
+        _gadj[r["person1"]].append((r["person2"], 0))
+        _gadj[r["person2"]].append((r["person1"], 0))
+while _q:
+    _x = _q.popleft()
+    for _y, _d in _gadj[_x]:
+        _v = _gen[_x] + _d
+        if _y not in _gen:
+            _gen[_y] = _v
+            _q.append(_y)
+        elif _gen[_y] != _v:
+            _gconf.append(f"{_x}({_gen[_x]}) ↔ {_y}({_gen[_y]}, по этому ребру {_v})")
+for _c in sorted(set(_gconf)):
+    errors.append(f"поколения противоречат друг другу: {_c} — несовместимы сами рёбра, "
+                  "а не разметка")
+for p in people:
+    want = _gen.get(p["id"])
+    if want is not None and p.get("generation") != want:
+        errors.append(f"person {p['id']}: generation={p.get('generation')}, "
+                      f"а по рёбрам выводится {want}")
+
 # --- `visible` НЕ ДОЛЖЕН РАСХОДИТЬСЯ С РОЛЬЮ ЧЕЛОВЕКА В ГРАФЕ --------------
 # Полотно древа рисует ПРЯМУЮ ЛИНИЮ: корень, его предков и потомков и их супругов.
 # Всё остальное — боковая родня, она видна в блоке «Семья» на карточках родных.
@@ -796,7 +865,15 @@ while _st:
             _desc.add(_c)
             _st.append(_c)
 _line = _anc | _desc | {ROOT}
-_expect = _line | {s for x in _line for s in spouses_of.get(x, [])}
+# ⭐ 2026-08-04, второе уточнение. Супруги берутся только у корня и его потомков.
+# Раньше брались и у предков — и правило само затаскивало на полотно женщин, чьё
+# материнство не доказано ни одним документом. Их приходилось выкидывать вручную
+# через visibility_exceptions, и трое из четырёх исключений были именно такими.
+# Настоящая мать предка сама является предком (у неё есть parent_child к следующему
+# поколению) и попадает на полотно без всякой оговорки про супругов. ⇒ Женщина на
+# полотне теперь означает «доказано, что она наша прабабушка», а не «за неё вышел
+# замуж наш прадед». Как только материнское ребро найдётся, правило вернёт её само.
+_expect = _line | {s for x in (_desc | {ROOT}) for s in spouses_of.get(x, [])}
 _exc = graph["meta"].get("visibility_exceptions") or {}
 for p in people:
     want, have = p["id"] in _expect, p.get("visible") is not False
@@ -935,6 +1012,29 @@ def _reachable(skip=()):
     return seen
 
 
+def _ancestors(skip=()):
+    """Чьими предками мы себя считаем, если выкинуть перечисленные рёбра.
+
+    Второе число рядом со связностью, и оно про другое. Связность держит брачное
+    ребро: если отец окажется не отцом, вся его линия остаётся прицепленной к графу
+    через жену, и «отвалится» покажет ноль. Но предками эти люди быть перестают —
+    а исследование ведётся именно про предков.
+    """
+    skip = {skip} if isinstance(skip, str) else set(skip)
+    up = {}
+    for r in rels:
+        if r["id"] in skip or r["type"] != "parent_child":
+            continue
+        up.setdefault(r["child"], []).append(r["parent"])
+    seen, stack = set(), [ROOT]
+    while stack:
+        for nxt in up.get(stack.pop(), []):
+            if nxt not in seen:
+                seen.add(nxt)
+                stack.append(nxt)
+    return seen
+
+
 def write_status():
     from datetime import date
     P = {p["id"]: p for p in people}
@@ -1010,8 +1110,13 @@ def write_status():
     # --- 2. Слабые рёбра, отсортированные по цене ошибки ------------------
     add("## Слабые рёбра: что рухнет, если гипотеза не подтвердится")
     add("")
-    add("«Отвалится» — сколько человек потеряют связь с корнем графа, если это ребро")
-    add("окажется ложным. Считается снятием ребра и обходом графа заново, а не на глаз.")
+    add("Два числа, и они про разное. **Отвалится** — сколько человек потеряют связь")
+    add("с корнем графа. **Не предки** — сколько перестанут быть предками корня.")
+    add("Оба считаются снятием рёбер и обходом графа заново, а не на глаз.")
+    add("")
+    add("🔴 Смотреть надо на второе. Связность держит брачное ребро: если отец окажется")
+    add("не отцом, вся его линия остаётся прицепленной к графу через жену, и «отвалится»")
+    add("честно покажет ноль — при том что предками эти люди быть перестали.")
     add("")
     weak = [r for r in rels if r["confidence"] != "confirmed"]
     who_of = lambda r: (f"{name(r['parent'])} → {name(r['child'])}"
@@ -1026,20 +1131,22 @@ def write_status():
     for r in weak:
         for h in (r.get("hypotheses") or []):
             by_hyp.setdefault(h, []).append(r)
+    anc_base = _ancestors()
     hrows = []
     for h, rr in by_hyp.items():
-        hrows.append((len(base - _reachable([x["id"] for x in rr])), h, rr))
-    hrows.sort(key=lambda x: -x[0])
+        ids = [x["id"] for x in rr]
+        hrows.append((len(base - _reachable(ids)), len(anc_base - _ancestors(ids)), h, rr))
+    hrows.sort(key=lambda x: (-x[1], -x[0]))    # предки важнее связности
 
-    add("### По гипотезам — сколько людей отвалится, если версия не подтвердится")
+    add("### По гипотезам — что рухнет, если версия не подтвердится")
     add("")
-    add("| Отвалится | Гипотеза | Статус | На скольких рёбрах |")
-    add("|---:|---|---|---|")
+    add("| Отвалится | Не предки | Гипотеза | Статус | На скольких рёбрах |")
+    add("|---:|---:|---|---|---|")
     H0 = {h["id"]: h for h in hyps["hypotheses"]}
-    for lost, h, rr in hrows:
+    for lost, unanc, h, rr in hrows:
         st = H0.get(h, {}).get("status", "?")
-        flag = "⚠️ " if st in ("confirmed", "rejected") else ("🔴 " if lost else "")
-        add(f"| {flag}**{lost}** | `{h}` | {st} | {len(rr)} "
+        flag = "⚠️ " if st in ("confirmed", "rejected") else ("🔴 " if unanc else "")
+        add(f"| **{lost}** | {flag}**{unanc}** | `{h}` | {st} | {len(rr)} "
             f"({', '.join('`%s`' % x['id'] for x in rr)}) |")
     add("")
     add("⚠️ в статусе — **гипотеза уже решена, а ребро на ней всё ещё слабое**. "
@@ -1049,19 +1156,20 @@ def write_status():
 
     add("### По рёбрам — поштучно")
     add("")
-    rows = sorted(((len(base - _reachable(r["id"])), r) for r in weak),
-                  key=lambda x: (-x[0], x[1]["confidence"]))
-    add("| Отвалится | Ребро | Кто | Достоверность | Гипотезы |")
-    add("|---:|---|---|---|---|")
-    for lost, r in rows:
+    rows = sorted(((len(base - _reachable(r["id"])),
+                    len(anc_base - _ancestors(r["id"])), r) for r in weak),
+                  key=lambda x: (-x[1], -x[0], x[2]["confidence"]))
+    add("| Отвалится | Не предки | Ребро | Кто | Достоверность | Гипотезы |")
+    add("|---:|---:|---|---|---|---|")
+    for lost, unanc, r in rows:
         hy = ", ".join(f"`{h}`" for h in (r.get("hypotheses") or [])) or "— **нет гипотезы**"
-        add(f"| {'🔴 ' if lost else ''}**{lost}** | `{r['id']}` | {who_of(r)} | "
+        add(f"| **{lost}** | {'🔴 ' if unanc else ''}**{unanc}** | `{r['id']}` | {who_of(r)} | "
             f"{r['confidence']} | {hy} |")
     add("")
     nohyp = [r["id"] for r in weak if not r.get("hypotheses")]
     add(f"Всего слабых рёбер: **{len(weak)}** из {len(rels)}. "
-        f"Ноль в столбце означает лишь, что человек удержится ДРУГИМ ребром, — "
-        f"смотреть надо таблицу по гипотезам выше.")
+        f"Ноль в обоих столбцах означает лишь, что человек удержится ДРУГИМ ребром "
+        f"и предком остаётся, — смотреть надо таблицу по гипотезам выше.")
     if nohyp:
         add("")
         add(f"🔴 **{len(nohyp)} слабых рёбер вообще не сослались на гипотезу** "
@@ -1075,17 +1183,25 @@ def write_status():
     add("Гипотезы, на которых стоят неподтверждённые рёбра, — то есть те, чей ответ")
     add("меняет граф. Прочие открытые гипотезы (их больше) — в `data/hypotheses.yaml`.")
     add("")
-    load_of = {h: lost for lost, h, _rr in hrows}
+    load_of = {h: (lost, unanc) for lost, unanc, h, _rr in hrows}
     H = {h["id"]: h for h in hyps["hypotheses"]}
-    for hid, lost in sorted(load_of.items(), key=lambda kv: -kv[1]):
+    for hid, (lost, unanc) in sorted(load_of.items(), key=lambda kv: -max(kv[1])):
         h = H.get(hid)
         if not h:
             continue
         claim = " ".join(str(h.get("claim", "")).split())
-        add(f"- **`{hid}`** [{h['status']}] — держит {lost} чел. "
-            f"{claim[:200]}{'…' if len(claim) > 200 else ''}")
-        if h.get("resolves_with"):
-            add(f"  - *решает:* {' '.join(str(h['resolves_with']).split())[:190]}")
+        def _anc_word(n):
+            n100, n10 = n % 100, n % 10
+            if 11 <= n100 <= 14 or n10 == 0 or n10 >= 5:
+                return f"{n} предков"
+            return f"{n} предка" if n10 > 1 else f"{n} предка"
+        hold = _anc_word(unanc) if unanc else f"{lost} чел."
+        if lost and unanc:
+            hold = f"{_anc_word(unanc)} ({lost} чел. связностью)"
+        add(f"- **`{hid}`** [{h['status']}] — держит {hold}. "
+            f"{claim[:200].rstrip('.')}{'…' if len(claim) > 200 else ''}.")
+        if h.get("how_to_resolve"):
+            add(f"  - *решает:* {' '.join(str(h['how_to_resolve']).split())[:190]}")
     add("")
 
     # --- 4. Что делать дальше, по каналам ---------------------------------

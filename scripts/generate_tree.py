@@ -1040,21 +1040,12 @@ function familyHTML(p) {
   row('Отец', byRole('father'));
   row('Мать', byRole('mother'));
   row('Родитель', others);
+  // Запасных путей из полей spouse_name/siblings здесь больше нет: поля сняты
+  // 2026-08-04, и каждый супруг и брат теперь — узел с ребром, источником и задачей.
   const spouses = spousesOf[p.id] || [];
   if (spouses.length) row(spouses.length > 1 ? 'Супруги' : 'Супруг(а)', spouses);
-  else if (p.spouse_name) {
-    rows.push(`<dt>Супруг(а)</dt><dd><span class="chip plain">${esc(p.spouse_name)}</span>
-      <div class="rel-line">Отдельным человеком в графе не заведён(а).</div></dd>`);
-  }
   row('Братья и сёстры', siblingsOf(p.id).sort(byYear));
   row('Дети', [...(childrenOf[p.id] || [])].sort(byYear));
-
-  // free-text relatives from v1 that never got a node of their own
-  const textSibs = (p.siblings || []).filter(s => !byId[s]);
-  if (textSibs.length) {
-    rows.push(`<dt>Упомянуты как родня</dt><dd>${
-      textSibs.map(s => `<span class="chip plain">${esc(s)}</span>`).join('')}</dd>`);
-  }
 
   if (!rows.length) return '<div class="empty">Родственных связей в графе нет.</div>';
   return `<dl class="family">${rows.join('')}</dl>`;
