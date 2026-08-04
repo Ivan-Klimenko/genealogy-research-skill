@@ -1477,6 +1477,8 @@ html = HTML_TEMPLATE
 for token, value in replacements.items():
     html = html.replace(token, value)
 
+output_path.parent.mkdir(parents=True, exist_ok=True)  # новый проект: web/ ещё нет
+
 with open(output_path, 'w', encoding='utf-8') as f:
     f.write(html)
 

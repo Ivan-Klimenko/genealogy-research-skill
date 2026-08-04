@@ -66,6 +66,7 @@ by_id = {p["id"]: p for p in people}
 pids = set(by_id)
 sids = {s["id"] for s in sources["sources"]}
 hids = {h["id"] for h in hyps["hypotheses"]}
+_hyp_status = {h["id"]: h["status"] for h in hyps["hypotheses"]}
 
 ROOT = graph["meta"].get("root", "ivan_klimenko")
 CONFIDENCE = ("confirmed", "probable", "uncertain")
@@ -220,9 +221,23 @@ for r in rels:
     # Основание неуверенности обязано быть объектом, а не прозой. «probable, потому
     # что так написано в notes» не попадает ни в цену ошибки, ни в очередь задач:
     # именно так самая дорогая развилка проекта не показывалась в STATUS.md вовсе.
-    if r.get("confidence") != "confirmed" and not r.get("hypotheses"):
-        errors.append(f"relationship {rid}: confidence={r.get('confidence')}, "
-                      "но нет ни одной гипотезы — почему связь слабая, знает только проза")
+    # 🔴 И не просто гипотеза, а ОТКРЫТАЯ. Иначе получается тупик: все гипотезы ребра
+    # решены, ребро осталось probable, а «почему осторожность сохранена» написано прозой
+    # в notes — устранить такое предупреждение нечем, и оно превращается в фон.
+    # Требование открытой гипотезы самогасящееся: решив последнюю, ты обязан либо поднять
+    # достоверность, либо записать НОВЫЙ вопрос, которого не хватает. Так осознанная
+    # осторожность перестаёт быть репликой в заметке и становится ходом в очереди.
+    if r.get("confidence") != "confirmed":
+        _rh = r.get("hypotheses") or []
+        if not _rh:
+            errors.append(f"relationship {rid}: confidence={r.get('confidence')}, "
+                          "но нет ни одной гипотезы — почему связь слабая, знает только проза")
+        elif not any(_hyp_status.get(h) in ("open", "needs_verification") for h in _rh):
+            errors.append(
+                f"relationship {rid}: confidence={r.get('confidence')}, но ВСЕ его гипотезы "
+                f"решены ({', '.join(f'{h}={_hyp_status.get(h)}' for h in _rh)}) — "
+                "либо поднимай достоверность, либо заводи открытую гипотезу о том, "
+                "какого документа не хватает")
     if "notes" not in r:
         errors.append(f"relationship {rid}: нет поля notes")
 
@@ -433,11 +448,16 @@ for p in people:
 # КАРТА РЕСУРСОВ
 # ===========================================================================
 
-RM_STATUSES = tuple(rmap["meta"]["statuses"])
-RM_AVAIL = tuple(rmap["meta"]["availability"])
+# Значения по умолчанию — чтобы навык работал на ПУСТОМ проекте, а не только
+# на том, из которого он вырос. Найдено тестом переносимости 2026-08-04:
+# минимальный data/ ронял валидатор на первом же обращении к meta.
+RM_STATUSES = tuple(rmap.get("meta", {}).get("statuses")
+                    or ("not_explored", "partially_explored", "fully_explored"))
+RM_AVAIL = tuple(rmap.get("meta", {}).get("availability")
+                 or ("online", "reading_room", "archive_request", "unknown"))
 
 era_ids, era_status = set(), defaultdict(set)
-for era in rmap["eras"]:
+for era in (rmap.get("eras") or {}):
     if era["id"] in era_ids:
         errors.append(f"resource_map: дубликат эпохи {era['id']}")
     era_ids.add(era["id"])
@@ -451,13 +471,13 @@ for era in rmap["eras"]:
             if not re.match(r"^https?://", u):
                 errors.append(f"resource_map {era['id']}/{s.get('type')}: странный url {u}")
         for a in s.get("archives", []):
-            if a not in rmap["meta"]["archives"]:
+            if a not in (rmap.get("meta", {}).get("archives") or rmap.get("archives") or {}):
                 warnings.append(f"resource_map {era['id']}/{s.get('type')}: "
                                 f"архив {a} не описан в meta.archives")
         era_status[s.get("type")].add(s.get("status"))
 
 listed_people = set()
-for fam, data in rmap["family_resources"].items():
+for fam, data in (rmap.get("family_resources") or {}).items():
     for pid in data.get("people", []):
         if pid not in pids:
             errors.append(f"resource_map {fam}: people -> несуществующий {pid}")
@@ -492,7 +512,7 @@ if missing_from_map:
     warnings.append(f"resource_map: людей нет ни в одной фамилии: {missing_from_map}")
 
 rule_ids = set()
-for rule in rmap["discovery_rules"]:
+for rule in (rmap.get("discovery_rules") or []):
     if rule["id"] in rule_ids:
         errors.append(f"resource_map: дубликат правила {rule['id']}")
     rule_ids.add(rule["id"])
@@ -505,7 +525,7 @@ for rule in rmap["discovery_rules"]:
 # ===========================================================================
 
 for s in sources["sources"]:
-    if s.get("type") not in sources["meta"]["types"]:
+    if sources.get("meta", {}).get("types") and s.get("type") not in sources["meta"]["types"]:
         errors.append(f"source {s['id']}: неизвестный type={s.get('type')!r}")
     for pid in s.get("people_mentioned", []):
         if pid not in pids:
@@ -524,8 +544,44 @@ for s in sources["sources"]:
             warnings.append(f"source {s['id']}: raw_record лежит в каталоге {f.parts[-2]}, "
                             f"которого нет среди id людей")
 
+# --- сканы: связь с источником ВЫЧИСЛЯЕТСЯ, а не хранится -------------------
+# Имя файла обязано быть `d<дело>_sk<скан>[_что_на_нём].jpg`, и этого достаточно:
+# то же дело и тот же скан стоят в `archive_ref` источника. Заводить поле `scan`
+# не нужно — оно было бы производным, набранным руками, а такие ржавеют.
+#
+# ⚠️ Один скан законно принадлежит НЕСКОЛЬКИМ источникам: скан — это разворот,
+# а на развороте бывает пять рождений и две восприемницы (правило 15 («строка
+# указателя относится к развороту»)). Обратное тоже верно: сплошной прочёс — один
+# источник на десятки разворотов.
+SCAN_DIR = BASE / "data" / "scans" / "originals"
+_scan_pat = re.compile(r"^d(\d{1,4})_sk(\d{1,4})(?:_[a-z0-9_]+)?$", re.I)
+if SCAN_DIR.is_dir():
+    _ref_pairs = defaultdict(list)
+    for s in sources["sources"]:
+        for a, _mid, b in re.findall(r"д\.?\s?(\d{2,4})\b([^.]{0,25}?)ск(?:ан|\.)?\s?(\d{1,4})\b",
+                                     str(s.get("archive_ref", ""))):
+            _ref_pairs[(int(a), int(b))].append(s["id"])
+    _bad_name, _orphan_scan = [], []
+    for f in sorted(SCAN_DIR.iterdir()):
+        if f.suffix.lower() not in (".jpg", ".jpeg", ".png"):
+            continue
+        m = _scan_pat.match(f.stem)
+        if not m:
+            _bad_name.append(f.name)
+            continue
+        if not _ref_pairs.get((int(m.group(1)), int(m.group(2)))):
+            _orphan_scan.append(f.name)
+    if _bad_name:
+        errors.append("сканы с именем не по соглашению d<дело>_sk<скан>[_описание]: "
+                      + ", ".join(_bad_name) + " — по такому имени скан не связать с источником")
+    if _orphan_scan:
+        warnings.append(f"сканов, не отвечающих ни одному источнику: {len(_orphan_scan)} — "
+                        + ", ".join(_orphan_scan)
+                        + ". Скачаны, но документом в проекте не стали")
+
 for h in hyps["hypotheses"]:
-    if h.get("status") not in hyps["meta"]["statuses"]:
+    if h.get("status") not in (hyps.get("meta", {}).get("statuses")
+                               or ("confirmed", "rejected", "open", "needs_verification")):
         errors.append(f"hyp {h['id']}: неизвестный status={h.get('status')!r}")
     for pid in h.get("related_people", []):
         if pid not in pids:
@@ -566,14 +622,23 @@ for r in active:
 # зависимости — гипотеза может ссылаться на ребро исторически, — поэтому это
 # предупреждение, а не ошибка. Но именно так hyp_053 выпала из таблицы цены ошибки,
 # хотя без неё девять человек перестают быть предками.
+#
+# ⚠️ Проверка нарочно СУЖЕНА до неподтверждённых рёбер, и это не послабление.
+# В широком виде она давала три вечных срабатывания: `how_to_resolve` законно
+# упоминает уже подтверждённые рёбра, объясняя, что и так стоит на документе.
+# Устранить их было нечем — а предупреждение, которое нельзя устранить, это фон,
+# в котором тонет настоящее. Для confirmed-ребра упоминание и есть фон: оно стоит
+# на документах. Для слабого — подозрение, потому что слабое ребро обязано назвать
+# то, на чём держится.
 _rel_ids = {r["id"] for r in rels}
 _rel_hyps = {r["id"]: set(r.get("hypotheses") or []) for r in rels}
+_confirmed_rel = {r["id"] for r in rels if r.get("confidence") == "confirmed"}
 _asym = []
 for h in hyps["hypotheses"]:
     if h["status"] == "rejected":
         continue                      # отклонённая и не должна держать рёбра
     for rid in sorted(set(re.findall(r"rel_\d+", json.dumps(h, ensure_ascii=False)))):
-        if rid in _rel_ids and h["id"] not in _rel_hyps[rid]:
+        if rid in _rel_ids and rid not in _confirmed_rel and h["id"] not in _rel_hyps[rid]:
             _asym.append(f"{h['id']}→{rid}")
 if _asym:
     warnings.append("гипотеза называет ребро, ребро её не называет: "
@@ -591,7 +656,9 @@ QUEUE_CHANNELS = ("browser",         # делается отсюда: онлай
                   "archive_request", # письменный запрос в госархив, недели-месяцы ожидания
                   "zags",            # запрос в органы ЗАГС, только для прямых родственников
                   "reading_room")    # только очно: дело не оцифровано
-tasks = queue["queue"]
+# `queue` — канонический ключ; `tasks` принимается как синоним, чтобы новый проект,
+# заведённый по описанию схемы, не спотыкался о недокументированную мелочь.
+tasks = queue.get("queue", queue.get("tasks", []))
 seen_tasks = set()
 for t in tasks:
     if t["id"] in seen_tasks:
@@ -603,11 +670,41 @@ for t in tasks:
     if t.get("channel") not in QUEUE_CHANNELS:
         errors.append(f"task {t['id']}: неизвестный channel={t.get('channel')!r} "
                       f"(допустимы {', '.join(QUEUE_CHANNELS)})")
-    for fld in ("priority", "target_person", "goal"):
+    for fld in ("priority", "goal"):
         if not t.get(fld):
             errors.append(f"task {t['id']}: пустое поле {fld}")
-    if st == "blocked" and not t.get("blocked_by"):
-        errors.append(f"task {t['id']}: status=blocked, но не заполнено blocked_by")
+    if "target_person" in t:
+        errors.append(f"task {t['id']}: поле target_person снято — цель задаётся "
+                      "списком id в target_people, а словами она уже описана в goal")
+    # 🔴 Цель задачи — СПИСОК id, а не строка. Раньше это был свободный текст
+    # («Роман Сундуков (старший, ~1810-1830)»), 70 значений из 98 не были id,
+    # и витрина сопоставляла фронтир с задачей ПОДСТРОКОЙ по этому тексту.
+    # Список пустой — законно: задача может целить в фонд, приход или проект целиком.
+    tp = t.get("target_people")
+    if not isinstance(tp, list):
+        errors.append(f"task {t['id']}: target_people не список")
+    else:
+        for pid in tp:
+            if pid not in pids:
+                errors.append(f"task {t['id']}: target_people -> несуществующий {pid}")
+    rh = t.get("resolves_hypotheses")
+    if not isinstance(rh, list):
+        errors.append(f"task {t['id']}: resolves_hypotheses не список")
+    else:
+        for hid in rh:
+            if hid not in hids:
+                errors.append(f"task {t['id']}: resolves_hypotheses -> несуществующая {hid}")
+    bb = t.get("blocked_by")
+    if not isinstance(bb, list):
+        errors.append(f"task {t['id']}: blocked_by не список id задач "
+                      "(причина словами живёт в blocked_reason)")
+    else:
+        for dep in bb:
+            if dep not in {x["id"] for x in tasks}:
+                errors.append(f"task {t['id']}: blocked_by -> несуществующая задача {dep}")
+    if st == "blocked" and not (t.get("blocked_by") or t.get("blocked_reason")):
+        errors.append(f"task {t['id']}: status=blocked, но не сказано ни чем заблокирована "
+                      "(blocked_by), ни почему (blocked_reason)")
     # `cancelled` требует объяснения наравне с `done`. Задача, снятая без записи
     # о том, ЧЕМ она поглощена, — это не порядок в очереди, а тихое удаление:
     # через месяц никто не вспомнит, отработали её или бросили.
@@ -620,6 +717,22 @@ for t in tasks:
         errors.append(f"task {t['id']}: status={st}, но заполнено result")
     if st in ("pending", "in_progress") and not t.get("search_plan"):
         errors.append(f"task {t['id']}: status={st}, но пустой search_plan")
+
+# --- задача, чьи гипотезы уже решены ---------------------------------------
+# ⚠️ Это ЗАМЕНА неработавшей проверке. Прежняя объявляла задачу протухшей, если id
+# решённой гипотезы встретился где угодно в её тексте, — 23 сработки из 62 ожидающих,
+# почти все ложные: задача законно пишет «hyp_042 отклонена, поэтому ищем иначе».
+# Та же конструкция, что и линтер прозы, забракованный в тот же день. Теперь вопрос
+# задаётся структуре: задача ОБЪЯВИЛА, какие версии закрывает, и все они закрыты.
+_hst = {h["id"]: h["status"] for h in hyps["hypotheses"]}
+for t in tasks:
+    if t.get("status") not in ("pending", "in_progress", "blocked"):
+        continue
+    rh = [h for h in (t.get("resolves_hypotheses") or []) if h in _hst]
+    if rh and all(_hst[h] in ("confirmed", "rejected") for h in rh):
+        warnings.append(f"task {t['id']}: все объявленные гипотезы уже решены "
+                        f"({', '.join(f'{h}={_hst[h]}' for h in rh)}) — задача либо "
+                        "отработана, либо целит уже не туда")
 
 # Счётчики очереди сверяются вместе со всеми остальными — см. раздел «метаданные».
 
@@ -708,10 +821,16 @@ if orphan_src:
 # устранить, — не предупреждение, а фон.
 no_people_src = [s["id"] for s in sources["sources"] if not s.get("people_mentioned")]
 
-referenced_hyp = set(re.findall(r"hyp_\d+", blob_graph + blob_src + blob_map))
-unref_hyp = sorted(hids - referenced_hyp)
-if unref_hyp:
-    warnings.append(f"гипотезы, не упомянутые в графе/источниках/карте: {unref_hyp}")
+# ⚠️ Прежде здесь искалось упоминание id гипотезы в текстах графа/источников/карты.
+# Проверка была неустранимой по сути: методическая находка вроде «книги ЗАГС старше
+# 1926 г. переданы в архив» законно не упоминается нигде, и десять таких висели
+# в предупреждениях постоянно. Настоящий вопрос другой и всегда исправим: от кого
+# и от какого документа до этой версии вообще можно дойти.
+orphan_hyp = sorted(h["id"] for h in hyps["hypotheses"]
+                    if not (h.get("related_people") or h.get("related_sources")))
+if orphan_hyp:
+    errors.append(f"гипотезы без единой привязки — ни related_people, ни related_sources: "
+                  f"{orphan_hyp}. От человека и от документа до них не дойти")
 
 # --- метаданные ------------------------------------------------------------
 # Счётчики meta дублируют то, что и так лежит в данных, и до 2026-08-03 правились
@@ -767,10 +886,15 @@ if "--fix-counters" in sys.argv:
             want, have = fn(), meta_obj.get(key)
             if have == want:
                 continue
-            pat = re.compile(r"^(  %s: )\d+[ \t]*$" % re.escape(key), re.M)
+            pat = re.compile(r"^(  %s: ).*$" % re.escape(key), re.M)
             block, n = pat.subn(lambda m: m.group(1) + str(want), block, count=1)
             if n != 1:
-                errors.append(f"--fix-counters: не нашёл `  {key}:` в meta файла {fname}")
+                # Ключа может не быть вовсе — так выглядит НОВЫЙ проект, заведённый
+                # по описанию схемы. Дописываем, а не требуем от человека угадать
+                # имя счётчика (найдено тестом переносимости 2026-08-04).
+                block = block.rstrip("\n") + f"\n  {key}: {want}\n"
+                fixed.append(f"{fname}: {key} добавлен = {want}")
+                tail_changed = True
                 continue
             tail_changed = True
             fixed.append(f"{fname}: {key} {have} → {want}")
@@ -1040,18 +1164,19 @@ def write_status():
     P = {p["id"]: p for p in people}
     name = lambda i: (P[i].get("name_full") or P[i].get("name_ru") or i) if i in P else i
     base = _reachable()
-    task_by_person = {}
+    # Раньше здесь искалось подстрокой по свободному тексту `target_person`. Теперь
+    # цель задачи — список id, и сопоставление точное.
+    task_by_person, task_by_hyp = defaultdict(list), defaultdict(list)
     for t in tasks:
-        if t.get("status") == "pending":
-            task_by_person.setdefault(str(t.get("target_person", "")), []).append(t)
+        if t.get("status") not in ("pending", "in_progress"):
+            continue
+        for pid in (t.get("target_people") or []):
+            task_by_person[pid].append(t)
+        for hid in (t.get("resolves_hypotheses") or []):
+            task_by_hyp[hid].append(t)
 
     def tasks_for(pid):
-        """Задачи, целящие в этого человека, — по id и по имени."""
-        out = []
-        for key, lst in task_by_person.items():
-            if pid in key or (pid in P and (P[pid].get("name_ru") or "···") in key):
-                out += lst
-        return sorted(out, key=lambda t: t["priority"])
+        return sorted(task_by_person.get(pid, []), key=lambda t: t["priority"])
 
     L = []
     add = L.append
@@ -1195,13 +1320,19 @@ def write_status():
             if 11 <= n100 <= 14 or n10 == 0 or n10 >= 5:
                 return f"{n} предков"
             return f"{n} предка" if n10 > 1 else f"{n} предка"
-        hold = _anc_word(unanc) if unanc else f"{lost} чел."
+        hold = _anc_word(unanc) if unanc else f"{lost} чел"
         if lost and unanc:
             hold = f"{_anc_word(unanc)} ({lost} чел. связностью)"
         add(f"- **`{hid}`** [{h['status']}] — держит {hold}. "
             f"{claim[:200].rstrip('.')}{'…' if len(claim) > 200 else ''}.")
         if h.get("how_to_resolve"):
             add(f"  - *решает:* {' '.join(str(h['how_to_resolve']).split())[:190]}")
+        tt = sorted(task_by_hyp.get(hid, []), key=lambda t: t["priority"])
+        if tt:
+            add("  - *ход:* " + ", ".join(f"`{t['id']}` (p{t['priority']}, {t['channel']})"
+                                          for t in tt[:3]))
+        elif h["status"] in ("open", "needs_verification"):
+            add("  - 🔴 *хода нет:* ни одна активная задача не объявила, что закрывает эту версию")
     add("")
 
     # --- 4. Что делать дальше, по каналам ---------------------------------
@@ -1226,17 +1357,30 @@ def write_status():
     add(f"- Непроведённых находок: **{len(unintegrated)}** — "
         + ("чисто" if not unintegrated
            else "документ прочитан, а в графе его нет: " + ", ".join(unintegrated)))
-    resolved_h = {k for k, v in ((h["id"], h["status"]) for h in hyps["hypotheses"])
-                  if v in ("confirmed", "rejected")}
-    stale = []
-    for t in tasks:
-        if t.get("status") not in ("pending", "blocked"):
-            continue
-        blob = " ".join(str(v) for v in t.values())
-        if any(h in blob for h in resolved_h):
-            stale.append(t["id"])
-    add(f"- Задач, чьё обоснование ссылается на уже решённые гипотезы: **{len(stale)}**"
-        + (f" — {', '.join(stale)}" if stale else ""))
+    # ⚠️ Прежде здесь считалось упоминание решённой гипотезы ГДЕ УГОДНО в тексте
+    # задачи — 23 сработки из 62, почти все ложные. Заменено двумя вопросами
+    # к структуре, у обоих ответ проверяем.
+    resolved_h = {h["id"] for h in hyps["hypotheses"]
+                  if h["status"] in ("confirmed", "rejected")}
+    stale = [t["id"] for t in tasks
+             if t.get("status") in ("pending", "in_progress", "blocked")
+             and (t.get("resolves_hypotheses") or [])
+             and all(h in resolved_h for h in t["resolves_hypotheses"])]
+    add(f"- Задач, чьи объявленные гипотезы все уже решены: **{len(stale)}**"
+        + (f" — {', '.join(stale)}" if stale else " — чисто"))
+    no_move = sorted(h["id"] for h in hyps["hypotheses"]
+                     if h["status"] in ("open", "needs_verification")
+                     and not task_by_hyp.get(h["id"]))
+    open_n = sum(1 for h in hyps["hypotheses"]
+                 if h["status"] in ("open", "needs_verification"))
+    add(f"- Открытых версий, которые не берётся закрыть ни одна активная задача: "
+        f"**{len(no_move)}** из {open_n}"
+        + (f" — {', '.join(no_move[:25])}{'…' if len(no_move) > 25 else ''}"
+           if no_move else " — чисто"))
+    _sc = [w for w in warnings if w.startswith("сканов, не отвечающих")]
+    add(f"- Сканов, скачанных, но не ставших документом: "
+        f"**{_sc[0].split(': ')[1].split(' —')[0] if _sc else '0'}**"
+        + ("" if _sc else " — чисто"))
     add(f"- Людей без единого источника: "
         f"**{sum(1 for p in people if not p.get('sources'))}**")
     add(f"- Предупреждений валидатора: **{len(warnings)}**")
