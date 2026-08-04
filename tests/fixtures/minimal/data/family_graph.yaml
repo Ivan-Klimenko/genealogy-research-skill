@@ -30,8 +30,9 @@ people:
   military_service: null
   rank: null
   awards: []
-  sources: []
-  confidence: confirmed
+  evidence:
+  - {src: src_001, role: direct_knowledge}
+  existence: confirmed
   notes: Пробный узел.
   biography: Пробная биография для проверки переносимости навыка.
   research_wishes: |-

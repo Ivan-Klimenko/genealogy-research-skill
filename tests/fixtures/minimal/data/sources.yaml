@@ -1,3 +1,12 @@
 meta:
-  total_sources: 0
-sources: []
+  total_sources: 1
+sources:
+- id: src_001
+  type: family_testimony
+  archive: Семейный архив
+  archive_ref: null
+  url: null
+  description: Опрос субъекта исследования
+  people_mentioned: [test_person]
+  date_found: '2026-08-04'
+  data_extracted: Имя, отчество и год рождения субъекта названы им самим.

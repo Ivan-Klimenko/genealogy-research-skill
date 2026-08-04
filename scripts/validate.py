@@ -85,6 +85,21 @@ EVIDENCE_ROLES = (
 # Первые три СВЯЗЫВАЮТ участников свидетельством. Остальные лишь сужают круг кандидатов:
 # на них можно строить гипотезу, но не подтверждённое родство.
 STRONG_ROLES = ("joint_mention", "direct_knowledge", "family_memory")
+
+# Роль документа для ЧЕЛОВЕКА отвечает на другой вопрос, чем для связи: не «кто с кем»,
+# а «он ли это». Поэтому список свой.
+PERSON_ROLES = (
+    "named_directly",    # документ называет его; отождествление бесспорно
+    "direct_knowledge",  # свидетель знал его лично
+    "family_memory",     # помнят в семье
+    "patronymic",        # выведен из отчества потомка; собственной записи нет
+    "identified",        # МЫ отождествили эту запись с ним — требует гипотезы
+    "context",           # селение, приход, опись — очерчивает круг, но его не называет
+    "negative",          # отрицательный результат о нём
+)
+# Существование показывают только эти. Запись об однофамильце (`identified`), описание
+# архива (`context`) и отрицание (`negative`) сами по себе не говорят, что человек был.
+EXISTENCE_ROLES = ("named_directly", "direct_knowledge", "family_memory", "patronymic")
 REL_TYPES = ("parent_child", "marriage", "sibling")
 PARENT_ROLES = ("father", "mother", "parent")
 
@@ -119,14 +134,14 @@ for label, items in (("people", people), ("relationships", rels),
 PERSON_FIELDS = ["id", "name_ru", "name_full", "gender", "patronymic", "maiden_name",
                  "birth_date", "birth_place", "death_date", "death_cause", "occupation",
                  "generation", "role", "stub", "visible", "research_priority",
-                 "military_service", "rank", "awards", "sources", "confidence", "notes",
+                 "military_service", "rank", "awards", "evidence", "existence", "notes",
                  "biography", "research_wishes"]
 
 # Поля, снятые 2026-08-04: производные от рёбер и набранные руками. `siblings`
 # успел разойтись с sibling-рёбрами у 19 человек из 25, а `spouse_name` у девяти
 # прятал от графа настоящих людей — супругов, известных по документу, но не имевших
 # ни узла, ни источника, ни задачи. Всё перенесено в узлы и рёбра.
-BANNED_PERSON_FIELDS = ["spouse_name", "siblings"]
+BANNED_PERSON_FIELDS = ["spouse_name", "siblings"]   # см. также sources/confidence ниже
 
 MAX_PRIORITY = 5   # 0 — исследования не ведётся, 1 — двигает дерево прямо сейчас
 
@@ -161,15 +176,58 @@ for p in people:
         warnings.append(f"person {p['id']}: очень короткая biography ({len(bio)} симв.)")
     if p.get("gender") not in ("male", "female"):
         errors.append(f"person {p['id']}: gender={p.get('gender')!r}")
-    if p.get("confidence") not in CONFIDENCE:
-        errors.append(f"person {p['id']}: confidence={p.get('confidence')!r}")
+    # 🔴 СУЩЕСТВОВАНИЕ и ОТОЖДЕСТВЛЕНИЕ — разные утверждения, и прежде они были
+    # свалены в одно поле `confidence`. «Прадед Терентий точно был — его имя стоит
+    # в отчестве деда; но тот ли это Терентий в найденной записи?» — сказать было нечем.
+    # `existence` отвечает только на первый вопрос. Второй живёт на роли документа.
+    if "confidence" in p:
+        errors.append(f"person {p['id']}: поле confidence разделено — `existence` отвечает "
+                      "за «человек был», а отождествление с записью — за роль в evidence")
+    if p.get("existence") not in CONFIDENCE:
+        errors.append(f"person {p['id']}: existence={p.get('existence')!r}")
     if not isinstance(p.get("generation"), int):
         errors.append(f"person {p['id']}: generation не число")
-    for s in p.get("sources", []):
-        if s not in sids:
-            errors.append(f"person {p['id']}: sources -> несуществующий {s}")
-    if not p.get("sources"):
+    if "sources" in p:
+        errors.append(f"person {p['id']}: поле sources снято — вместо него evidence "
+                      "со списком {src, role}")
+    pev = p.get("evidence")
+    if not isinstance(pev, list):
+        errors.append(f"person {p['id']}: нет поля evidence (список {{src, role}})")
+        pev = []
+    psrc = []
+    for e in pev:
+        if not isinstance(e, dict) or "src" not in e or "role" not in e:
+            errors.append(f"person {p['id']}: evidence -> не {{src, role}}: {e!r}")
+            continue
+        if e["src"] not in sids:
+            errors.append(f"person {p['id']}: evidence -> несуществующий {e['src']}")
+        if e["role"] not in PERSON_ROLES:
+            errors.append(f"person {p['id']}: evidence -> неизвестная роль {e['role']!r} "
+                          f"(допустимы {', '.join(PERSON_ROLES)})")
+        # `identified` означает «мы утверждаем, что эта запись о нём». Утверждение
+        # обязано иметь владельца — гипотезу; иначе оно ничем не отличается от факта.
+        if e.get("role") == "identified":
+            hid = e.get("hyp")
+            if not hid:
+                errors.append(f"person {p['id']}: evidence {e['src']} role=identified "
+                              "без ссылки на гипотезу — отождествление утверждаем МЫ")
+            elif hid not in hids:
+                errors.append(f"person {p['id']}: evidence {e['src']} -> несуществующая {hid}")
+            elif _hyp_status.get(hid) in ("confirmed", "rejected"):
+                errors.append(f"person {p['id']}: evidence {e['src']} role=identified, "
+                              f"но {hid} уже {_hyp_status[hid]} — отождествление решено, "
+                              "роль должна стать named_directly либо запись снята")
+        psrc.append(e["src"])
+    # Существование доказывают только те роли, где человек НАЗВАН или его помнят.
+    # `identified`, `context` и `negative` сами по себе его не устанавливают:
+    # запись об однофамильце ничего не говорит о том, что наш человек был.
+    if p.get("existence") == "confirmed" and not any(
+            e.get("role") in EXISTENCE_ROLES for e in pev if isinstance(e, dict)):
+        errors.append(f"person {p['id']}: existence=confirmed, но ни один документ его "
+                      "не называет и никто его не помнит — существование не показано")
+    if not psrc:
         warnings.append(f"person {p['id']}: нет ни одного источника")
+    p["sources"] = psrc        # производное: остальному коду и витрине нужен плоский список
     # v1-поля не должны вернуться: родство живёт только в relationships
     for dead in ("father_id", "mother_id", "spouse_id"):
         if dead in p:
@@ -1112,8 +1170,10 @@ print(f"Ресурсов в карте: {sum(len(e.get('sources', [])) for e in 
 print(f"Гипотез:    {len(hyps['hypotheses'])}")
 print(f"Задач в очереди: {len(tasks)}")
 print()
-print("Люди по confidence:  ", dict(Counter(p["confidence"] for p in people)))
-print("Связи по confidence: ", dict(Counter(r["confidence"] for r in rels)))
+print("Люди по existence:   ", dict(Counter(p.get("existence") for p in people)))
+print("Роли документов:     ", dict(Counter(
+    e["role"] for p in people for e in (p.get("evidence") or []))))
+print("Связи по confidence: ", dict(Counter(r.get("confidence") for r in rels)))
 print("Больше всего вопросов:", ", ".join(
     f"{p['id']} ({len([ln for ln in (p.get('research_wishes') or '').split(chr(10)) if ln.strip()])})"
     for p in sorted(people, key=lambda x: -len((x.get("research_wishes") or "").split("\n")))[:5]))
@@ -1421,6 +1481,10 @@ def write_status():
     _mem_only = [r["id"] for r in rels if r["confidence"] == "confirmed"
                  and not any(e.get("role") in ("joint_mention", "direct_knowledge")
                              for e in (r.get("evidence") or []))]
+    _ident = [(p["id"], e["hyp"]) for p in people for e in (p.get("evidence") or [])
+              if isinstance(e, dict) and e.get("role") == "identified"]
+    add(f"- Людей, чьё отождествление с записью утверждаем МЫ: **{len({x[0] for x in _ident})}**"
+        + (" — " + ", ".join(f"{a} ({b})" for a, b in _ident) if _ident else " — чисто"))
     add(f"- Подтверждённых связей, стоящих только на семейной памяти: **{len(_mem_only)}**"
         + (f" — {', '.join(_mem_only)}. Документа нет ни одного" if _mem_only else " — чисто"))
     add(f"- Сканов, скачанных, но не ставших документом: "

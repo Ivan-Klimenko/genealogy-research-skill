@@ -664,10 +664,25 @@ const STATUS = {
 };
 const STATUS_ORDER = ['open', 'needs_verification', 'confirmed', 'rejected'];
 
+/* existence — уверенность в том, что ЧЕЛОВЕК БЫЛ. Отдельно от неё живёт вопрос
+   «а та ли это запись о нём»: он записан ролью документа (см. PERSON_ROLE_RU).
+   Прадед может существовать несомненно — его имя стоит в отчестве сына, — при том
+   что ни одна найденная запись к нему пока не привязана. */
 const CONFIDENCE = {
-  confirmed: { label: 'подтверждено', note: 'Человек опознан по документу — сплошная рамка карточки.' },
-  probable:  { label: 'вероятно',     note: 'Есть косвенные свидетельства (совпадение имени, деревни, отчества), но прямого документа пока нет — пунктирная рамка.' },
+  confirmed: { label: 'существование доказано', note: 'Человек назван в документе, либо его лично помнят — сплошная рамка карточки.' },
+  probable:  { label: 'вероятно существовал', note: 'Есть косвенные свидетельства — совпадение имени, деревни, отчества, — но прямого документа пока нет; пунктирная рамка.' },
   uncertain: { label: 'не установлено', note: 'Данные опираются на семейную память или единичное совпадение — точечная рамка.' },
+};
+
+/* Чем документ помогает ЧЕЛОВЕКУ: называет его или лишь очерчивает круг. */
+const PERSON_ROLE_RU = {
+  named_directly: 'назван в документе',
+  direct_knowledge: 'знали лично',
+  family_memory: 'семейная память',
+  patronymic: 'выведен из отчества потомка',
+  identified: '⚠️ отождествлено нами',
+  context: 'очерчивает круг',
+  negative: 'отрицательный результат',
 };
 
 /* confidence of a link — в v2 это отдельная величина: человек может быть
@@ -866,7 +881,7 @@ const totalSlots = Math.max(...units.map(u => u.x + u.w));
 const canvas = el('canvas');
 
 function cardHTML(p) {
-  const cls = ['card', 'conf-' + (p.confidence || 'confirmed')];
+  const cls = ['card', 'conf-' + (p.existence || 'confirmed')];
   if (isSubject(p)) cls.push('is-subject');
   if (p.stub) cls.push('is-stub');
   const icons = iconsOf(p)
@@ -1144,10 +1159,13 @@ function wishesHTML(p) {
   return `<ul class="wishes">${items.map(w => `<li>${esc(w)}</li>`).join('')}</ul>`;
 }
 
-function sourceHTML(s) {
+function sourceHTML(s, ev) {
   const meta = [s.archive, s.archive_ref].filter(Boolean).join(' · ');
+  const role = ev && PERSON_ROLE_RU[ev.role]
+    ? ` <span class="type">${esc(PERSON_ROLE_RU[ev.role])}${ev.hyp ? ', ' + esc(ev.hyp) : ''}</span>`
+    : '';
   return `<div class="src">
-    <div class="top"><span class="type">${esc(SRC_TYPES[s.type] || s.type)}</span>
+    <div class="top"><span class="type">${esc(SRC_TYPES[s.type] || s.type)}</span>${role}
       <span class="desc">${esc(s.description)}</span></div>
     ${meta ? `<div class="meta">${esc(meta)}</div>` : ''}
     ${s.data_extracted ? `<div class="extract">${esc(s.data_extracted)}</div>` : ''}
@@ -1168,7 +1186,7 @@ function openPerson(id) {
   const panel = el('panel');
   panel.style.setProperty('--accent', accent);
 
-  const conf = CONFIDENCE[p.confidence] || { label: p.confidence, note: '' };
+  const conf = CONFIDENCE[p.existence] || { label: p.existence, note: '' };
 
   const rows = [];
   const add = (k, v) => { if (v) rows.push(`<dt>${k}</dt><dd>${v}</dd>`); };
@@ -1184,14 +1202,22 @@ function openPerson(id) {
   add('Архивный шифр', esc(p.archive_ref));
   if ((p.awards || []).length) add('Награды', p.awards.map(a => esc(a)).join('<br>'));
 
-  const srcs = (p.sources || []).map(sid => srcById[sid]).filter(Boolean);
+  const roleOf = {};
+  (p.evidence || []).forEach(e => { roleOf[e.src] = e; });
+  const srcs = (p.evidence || []).map(e => srcById[e.src]).filter(Boolean);
   const hyps = hypsByPerson[p.id] || [];
 
   el('panel-title').textContent = p.name_ru;
   el('panel-sub').textContent = [p.role, p.name_full].filter(Boolean).join(' · ');
 
   el('panel-body').innerHTML = `
-    <div class="conf-note"><b>Достоверность: ${esc(conf.label)}.</b> ${esc(conf.note)}</div>
+    <div class="conf-note"><b>Достоверность: ${esc(conf.label)}.</b> ${esc(conf.note)}${
+      (p.evidence || []).some(e => e.role === 'identified')
+        ? `<br><b>⚠️ Отождествление под вопросом.</b> Документ называет человека с тем же
+           именем, а что это именно он — утверждаем мы: ${esc((p.evidence || [])
+             .filter(e => e.role === 'identified')
+             .map(e => `${e.src} → ${e.hyp}`).join(', '))}.`
+        : ''}</div>
     ${p.stub ? `<div class="conf-note"><b>📋 Требуется исследование.</b>
       Человек внесён в граф, чтобы к нему можно было привязать связь, источник и задачу,
       но собственного исследования по нему ещё не велось — до v2 он существовал только
@@ -1207,7 +1233,7 @@ function openPerson(id) {
     ${p.biography ? `<h3>Биография</h3><div class="bio">${esc(p.biography)}</div>` : ''}
     ${p.notes ? `<h3>Заметки исследования</h3><div class="bio">${esc(p.notes)}</div>` : ''}
     <h3>Источники (${srcs.length})</h3>
-    ${srcs.length ? srcs.map(sourceHTML).join('') : '<div class="empty">Источников пока нет.</div>'}
+    ${srcs.length ? srcs.map(s => sourceHTML(s, roleOf[s.id])).join('') : '<div class="empty">Источников пока нет.</div>'}
     <h3>Гипотезы (${hyps.length})</h3>
     ${hyps.length ? hyps.map(h => `<div class="hyp-mini">${badge(h.status)}
         <div class="claim">${esc(h.claim)}</div>

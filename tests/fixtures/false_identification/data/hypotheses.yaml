@@ -1,0 +1,17 @@
+meta:
+  total_hypotheses: 1
+  statuses: [confirmed, rejected, open, needs_verification]
+hypotheses:
+- id: hyp_001
+  claim: Терентий Иванов из записи ф.1 оп.1 д.2 ск.5 — это прадед субъекта.
+  status: open
+  date_created: '2026-08-04'
+  date_resolved: null
+  evidence_for:
+  - Совпадает имя
+  evidence_against:
+  - Отчество в записи не указано; Терентиев Ивановых в уезде несколько
+  related_people: [pradeed]
+  related_sources: [src_002]
+  resolution: null
+  how_to_resolve: Найти запись, называющую Терентия вместе с сыном.

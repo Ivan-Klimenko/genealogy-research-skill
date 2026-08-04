@@ -1,0 +1,21 @@
+meta:
+  total_sources: 2
+sources:
+- id: src_001
+  type: family_testimony
+  archive: Семейный архив
+  archive_ref: null
+  url: null
+  description: Опрос субъекта исследования
+  people_mentioned: [test_person]
+  date_found: '2026-08-04'
+  data_extracted: Имя, отчество и год рождения субъекта названы им самим.
+- id: src_002
+  type: metric_book
+  archive: Тест
+  archive_ref: ф.1 оп.1 д.2 ск.5
+  url: null
+  description: Запись о Терентии Иванове — одном из нескольких в уезде
+  people_mentioned: []
+  date_found: '2026-08-04'
+  data_extracted: Терентий Иванов, крестьянин. Отчество не указано.
