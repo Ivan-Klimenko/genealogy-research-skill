@@ -22,10 +22,34 @@ from concurrent.futures import ThreadPoolExecutor
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
+
+
+def _project(start=None):
+    """Каталог ПРОЕКТА данных, а не навыка.
+
+    Куки, кэши и сканы — данные конкретной семьи, они живут в проекте. Скрипт
+    же лежит в навыке, общем для всех проектов. Пока путь считался от навыка,
+    скрипт искал `data/.yandex_cookie.txt` внутри `~/.claude/skills/...` — то есть
+    там, где данных нет и быть не должно. Найдено 2026-08-04 на живой задаче.
+    """
+    env = os.environ.get('GENEALOGY_PROJECT')
+    if env:
+        return os.path.abspath(env)
+    here = os.path.abspath(os.getcwd())
+    while True:
+        if os.path.exists(os.path.join(here, 'data', 'family_graph.yaml')):
+            return here
+        nxt = os.path.dirname(here)
+        if nxt == here:
+            return ROOT
+        here = nxt
+
+
+PROJECT = _project()
 sys.path.insert(0, HERE)
 from yandex_original import curl, inventory_map, sheets  # noqa: E402
 
-DEST = os.environ.get('YA_MARKUP', os.path.join(ROOT, 'data', '.yandex_markup'))
+DEST = os.environ.get('YA_MARKUP', os.path.join(PROJECT, 'data', '.yandex_markup'))
 
 
 def markup_text(sheet_uuid):
