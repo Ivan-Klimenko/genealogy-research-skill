@@ -70,6 +70,21 @@ _hyp_status = {h["id"]: h["status"] for h in hyps["hypotheses"]}
 
 ROOT = graph["meta"].get("root", "ivan_klimenko")
 CONFIDENCE = ("confirmed", "probable", "uncertain")
+
+# Роль документа в связи — ЧЕМ именно он её подтверждает. Список намеренно короткий:
+# каждая роль отвечает методическому правилу, и различает их человек, а не машина.
+EVIDENCE_ROLES = (
+    "joint_mention",     # документ называет ОБЕ стороны вместе          (правило 1)
+    "direct_knowledge",  # свидетель знал обоих лично
+    "family_memory",     # пересказ в семье, свидетель лично не знал     (правило 8)
+    "patronymic",        # отчество указывает на имя родителя            (правило 3)
+    "arithmetic",        # даты и возрасты делают связь возможной        (правило 2)
+    "context",           # селение, приход, круг восприемников
+    "negative",          # отрицательный результат, ограничивающий поиск (правило 4)
+)
+# Первые три СВЯЗЫВАЮТ участников свидетельством. Остальные лишь сужают круг кандидатов:
+# на них можно строить гипотезу, но не подтверждённое родство.
+STRONG_ROLES = ("joint_mention", "direct_knowledge", "family_memory")
 REL_TYPES = ("parent_child", "marriage", "sibling")
 PARENT_ROLES = ("father", "mother", "parent")
 
@@ -204,17 +219,42 @@ for r in rels:
 
     if r.get("confidence") not in CONFIDENCE:
         errors.append(f"relationship {rid}: confidence={r.get('confidence')!r}")
-    srcs = r.get("sources")
-    if srcs is None:
-        errors.append(f"relationship {rid}: нет поля sources")
-        srcs = []
-    for s in srcs:
-        if s not in sids:
-            errors.append(f"relationship {rid}: sources -> несуществующий {s}")
-    if r.get("confidence") == "confirmed" and not srcs:
-        errors.append(f"relationship {rid}: confidence=confirmed, но sources пуст")
+    # 🔴 Ссылка на документ — не голый id, а утверждение о РОЛИ: чем именно этот документ
+    # подтверждает эту связь. Без роли правило 1 («совместное упоминание») невозможно
+    # проверить машиной, и это не теория: верхушка Сундуковых три месяца стояла
+    # перевёрнутой. Цепочку собрали из отчеств однофамильцев одной деревни, ни одна пара
+    # не была названа вместе ни в одном документе — и связи всё равно значились confirmed.
+    if "sources" in r:
+        errors.append(f"relationship {rid}: поле sources снято — вместо него evidence "
+                      "со списком {src, role}")
+    ev = r.get("evidence")
+    if not isinstance(ev, list):
+        errors.append(f"relationship {rid}: нет поля evidence (список {{src, role}})")
+        ev = []
+    srcs = []
+    for e in ev:
+        if not isinstance(e, dict) or "src" not in e or "role" not in e:
+            errors.append(f"relationship {rid}: evidence -> не {{src, role}}: {e!r}")
+            continue
+        if e["src"] not in sids:
+            errors.append(f"relationship {rid}: evidence -> несуществующий {e['src']}")
+        if e["role"] not in EVIDENCE_ROLES:
+            errors.append(f"relationship {rid}: evidence -> неизвестная роль {e['role']!r} "
+                          f"(допустимы {', '.join(EVIDENCE_ROLES)})")
+        srcs.append(e["src"])
+    # Право на confirmed дают только те роли, где участники СВЯЗАНЫ свидетельством,
+    # а не сведены нами: документ назвал обоих, либо свидетель знал обоих.
+    # Отчество, арифметика и общее селение — это сужение круга, а не доказательство.
+    strong = [e for e in ev if isinstance(e, dict) and e.get("role") in STRONG_ROLES]
+    if r.get("confidence") == "confirmed" and not strong:
+        errors.append(
+            f"relationship {rid}: confidence=confirmed, но ни один документ не назвал обоих "
+            f"вместе и никто не знал обоих лично (роли: "
+            f"{', '.join(sorted({e.get('role', '?') for e in ev if isinstance(e, dict)})) or '—'}). "
+            "Такая связь СВЕДЕНА нами, а не засвидетельствована")
     if not srcs and r.get("confidence") != "uncertain":
-        errors.append(f"relationship {rid}: sources пуст — допустимо только при confidence=uncertain")
+        errors.append(f"relationship {rid}: evidence пуст — допустимо только при confidence=uncertain")
+    r["sources"] = srcs        # производное: остальному коду и витрине нужен плоский список
     for h in r.get("hypotheses", []):
         if h not in hids:
             errors.append(f"relationship {rid}: hypotheses -> несуществующая {h}")
@@ -1378,6 +1418,11 @@ def write_status():
         + (f" — {', '.join(no_move[:25])}{'…' if len(no_move) > 25 else ''}"
            if no_move else " — чисто"))
     _sc = [w for w in warnings if w.startswith("сканов, не отвечающих")]
+    _mem_only = [r["id"] for r in rels if r["confidence"] == "confirmed"
+                 and not any(e.get("role") in ("joint_mention", "direct_knowledge")
+                             for e in (r.get("evidence") or []))]
+    add(f"- Подтверждённых связей, стоящих только на семейной памяти: **{len(_mem_only)}**"
+        + (f" — {', '.join(_mem_only)}. Документа нет ни одного" if _mem_only else " — чисто"))
     add(f"- Сканов, скачанных, но не ставших документом: "
         f"**{_sc[0].split(': ')[1].split(' —')[0] if _sc else '0'}**"
         + ("" if _sc else " — чисто"))

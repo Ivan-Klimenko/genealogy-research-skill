@@ -1,0 +1,4 @@
+meta:
+  total_hypotheses: 0
+  statuses: [confirmed, rejected, open, needs_verification]
+hypotheses: []

@@ -1,0 +1,39 @@
+meta:
+  title: Пробный проект
+  schema_version: 2
+  model: graph
+  last_updated: '2026-08-04'
+  total_people: 1
+  stub_people: 0
+  hidden_people: 0
+  total_relationships: 0
+  generations: 0
+  root: test_person
+  visibility_exceptions: {}
+people:
+- id: test_person
+  name_ru: Иванов Иван
+  name_full: Иванов Иван Иванович
+  gender: male
+  patronymic: Иванович
+  maiden_name: null
+  birth_date: '1980-01-01'
+  birth_place: null
+  death_date: null
+  death_cause: null
+  occupation: null
+  generation: 0
+  role: Субъект исследования
+  stub: false
+  visible: true
+  research_priority: 1
+  military_service: null
+  rank: null
+  awards: []
+  sources: []
+  confidence: confirmed
+  notes: Пробный узел.
+  biography: Пробная биография для проверки переносимости навыка.
+  research_wishes: |-
+    - Найти родителей
+relationships: []

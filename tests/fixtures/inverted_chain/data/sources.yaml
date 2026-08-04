@@ -1,0 +1,12 @@
+meta:
+  total_sources: 1
+sources:
+- id: src_020
+  type: metric_book
+  archive: Тест
+  archive_ref: ф.1 оп.1 д.1 ск.1
+  url: null
+  description: Сводная выписка по однофамильцам деревни
+  people_mentioned: [andrey_pavlov, test_person]
+  date_found: '2026-08-04'
+  data_extracted: Перечень Сундуковых деревни без указания родства.

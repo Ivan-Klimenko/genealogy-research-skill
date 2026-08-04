@@ -1,0 +1,76 @@
+meta:
+  title: Пробный проект
+  schema_version: 2
+  model: graph
+  last_updated: '2026-08-04'
+  total_people: 2
+  stub_people: 1
+  hidden_people: 0
+  total_relationships: 1
+  generations: 1
+  root: test_person
+  visibility_exceptions: {}
+people:
+- id: andrey_pavlov
+  name_ru: Андрей Павлов
+  name_full: Сундуков Андрей Павлов
+  gender: male
+  patronymic: Павлов
+  maiden_name: null
+  birth_date: null
+  birth_place: null
+  death_date: null
+  death_cause: null
+  occupation: null
+  generation: 1
+  role: Кандидат в отцы
+  stub: true
+  visible: true
+  research_priority: 0
+  military_service: null
+  rank: null
+  awards: []
+  sources: [src_020]
+  confidence: probable
+  notes: Однофамилец той же деревни.
+  biography: Проверочный узел для регрессионного теста на перевёрнутую цепочку по отчествам.
+  research_wishes: null
+- id: test_person
+  name_ru: Иванов Иван
+  name_full: Иванов Иван Иванович
+  gender: male
+  patronymic: Иванович
+  maiden_name: null
+  birth_date: '1980-01-01'
+  birth_place: null
+  death_date: null
+  death_cause: null
+  occupation: null
+  generation: 0
+  role: Субъект исследования
+  stub: false
+  visible: true
+  research_priority: 1
+  military_service: null
+  rank: null
+  awards: []
+  sources: []
+  confidence: confirmed
+  notes: Пробный узел.
+  biography: Пробная биография для проверки переносимости навыка.
+  research_wishes: |-
+    - Найти родителей
+relationships:
+- id: rel_001
+  type: parent_child
+  parent: andrey_pavlov
+  child: test_person
+  parent_role: father
+  confidence: confirmed
+  evidence:
+  - {src: src_020, role: patronymic}
+  - {src: src_020, role: context}
+  hypotheses: []
+  notes: |-
+    Отчество «Андреев» указывает на отца Андрея; в той же деревне живёт Андрей Павлов
+    Сундуков. Сцепка по отчеству в сводной выписке.

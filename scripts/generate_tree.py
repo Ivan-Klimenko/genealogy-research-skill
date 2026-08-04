@@ -1104,11 +1104,26 @@ function assumptionsHTML(p) {
   </div>`;
 }
 
-/** One line under a relative: confidence of the link + its sources and hypotheses. */
+/* Чем документ подтверждает связь. Читатель должен видеть разницу между «их назвали
+   вместе в одной записи» и «мы свели их по отчеству»: вторая конструкция однажды
+   перевернула целую ветвь дерева. */
+const ROLE_RU = {
+  joint_mention: 'названы вместе',
+  direct_knowledge: 'знал лично',
+  family_memory: 'семейная память',
+  patronymic: 'по отчеству',
+  arithmetic: 'по датам',
+  context: 'по деревне и кругу',
+  negative: 'отрицательный результат',
+};
+
+/** One line under a relative: confidence of the link + its evidence and hypotheses. */
 function relLine(rel) {
   if (!rel) return '';
   const bits = [];
-  if ((rel.sources || []).length) bits.push('источники: ' + rel.sources.join(', '));
+  const ev = rel.evidence || [];
+  if (ev.length) bits.push('источники: ' + ev.map(
+    e => `${e.src} (${ROLE_RU[e.role] || e.role})`).join(', '));
   if ((rel.hypotheses || []).length) bits.push('гипотезы: ' + rel.hypotheses.join(', '));
   return `<div class="rel-line"><span class="conf ${esc(rel.confidence)}">${esc(rel.id)} — ${esc(REL_CONF[rel.confidence] || rel.confidence)}</span>${
     bits.length ? ' · ' + esc(bits.join(' · ')) : ''}${
