@@ -25,8 +25,8 @@
 Обязательные поля: `id`, `name_ru`, `name_full`, `gender`, `patronymic`, `maiden_name`,
 `birth_date`, `birth_place`, `death_date`, `death_cause`, `occupation`, `generation`,
 `role`, `stub`, `visible`, `research_priority`,
-`military_service`, `rank`, `awards`, `sources`, `confidence`, `notes`, `biography`,
-`research_wishes`.
+`military_service`, `rank`, `awards`, `evidence`, `existence`, `notes`, `biography`,
+`biography_basis`, `research_wishes`. Необязательные: `superseded_by`, `superseded_reason`.
 
 🔴 **Полей `spouse_name` и `siblings` быть не должно — валидатор их запрещает.** Оба
 описывали родство в карточке человека, то есть дублировали рёбра, и оба ржавели: `siblings`
