@@ -28,7 +28,8 @@ git clone <этот репозиторий> ~/.claude/skills/genealogy-research
 | `references/HANDOFF.md` | протокол параллельных веток и схема `proposal.yaml` |
 | `references/ARCHIVE-APIS.md` | обходы SPA-интерфейсов архивов и генеалогических баз — с границами каждого |
 | `scripts/validate.py` | валидация целостности + генерация витрины состояния `STATUS.md` |
-| `scripts/generate_tree.py` | отрисовка древа в один самодостаточный HTML |
+| `scripts/generate_tree.py` | отрисовка древа в HTML: раскладка по ветвям, снимки документов, свёрнутые подробности |
+| `scripts/build_scans.py` | веб-версии сканов: 2200 px для чтения, 400 px для плитки |
 | `scripts/merge_handoff.py` | механика сведения отчётов параллельных веток |
 | `scripts/yandex_*.py` | сплошная выкачка расшифровок и оригиналов сканов Яндекс-Архива |
 | `tests/run_tests.py` | переносимость на минимальном проекте + регрессия по главной ошибке |

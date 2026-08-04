@@ -16,6 +16,8 @@ every link carries its own confidence — which the connector lines now show.
 """
 
 import json
+import pathlib
+import re
 import yaml
 from pathlib import Path
 
@@ -60,6 +62,59 @@ def load_yaml(path: Path):
 graph = load_yaml(data_dir / 'family_graph.yaml')
 sources = load_yaml(data_dir / 'sources.yaml')
 hypotheses = load_yaml(data_dir / 'hypotheses.yaml')
+
+
+# --------------------------------------------------------------------------
+# Изображения документов, привязанные к источникам
+#
+# 🔴 Связь ВЫЧИСЛЯЕТСЯ, поля `scan` у источника нет — оно было бы производным,
+# набранным руками. Правил два, и оба однозначны:
+#   1. имя файла `d<дело>_sk<скан>[_описание].jpg` ⇄ то же дело и скан в `archive_ref`;
+#   2. любой путь под `data/scans/`, упомянутый в дословной копии (`raw_record`), —
+#      так подхватываются семейные снимки и записи, у которых архивного шифра нет.
+# ⚠️ Связь «многие ко многим»: скан — это разворот, на нём бывает пять записей
+# (правило 15), а сплошной прочёс — один источник на десятки разворотов.
+# --------------------------------------------------------------------------
+
+_SCAN_RE = re.compile(r'^d(\d{1,4})_sk(\d{1,4})(?:_[a-z0-9_]+)?$', re.I)
+_REF_RE = re.compile(r'д\.?\s?(\d{2,4})\b[^.]{0,25}?ск(?:ан|\.)?\s?(\d{1,4})\b')
+_PATH_RE = re.compile(r'data/scans/[\w./-]+\.(?:jpg|jpeg|png)', re.I)
+
+
+def collect_scans(sources_doc):
+    """{src_id: [имя файла без каталога, ...]} — только для существующих картинок."""
+    web = project_root / 'web' / 'scans' / 'view'
+    have = {f.stem: f.name for f in web.iterdir()} if web.is_dir() else {}
+    by_pair = {}
+    for stem in have:
+        m = _SCAN_RE.match(stem)
+        if m:
+            by_pair.setdefault((int(m.group(1)), int(m.group(2))), []).append(stem)
+
+    out = {}
+    for s in sources_doc.get('sources') or []:
+        found = []
+        for a, b in _REF_RE.findall(str(s.get('archive_ref') or '')):
+            found += by_pair.get((int(a), int(b)), [])
+        raw = s.get('raw_record')
+        if raw:
+            f = project_root / raw
+            if f.is_file():
+                try:
+                    for path in _PATH_RE.findall(f.read_text(encoding='utf-8')):
+                        stem = pathlib.PurePosixPath(path).stem
+                        if stem in have:
+                            found.append(stem)
+                except OSError:
+                    pass
+        seen, uniq = set(), []
+        for x in found:
+            if x not in seen:
+                seen.add(x)
+                uniq.append(have[x])
+        if uniq:
+            out[s['id']] = uniq
+    return out
 
 
 def js_json(obj) -> str:
@@ -481,6 +536,74 @@ aside.panel.on { transform: none; }
 .src .meta { color: var(--muted); font-size: 12.5px; margin-top: 3px; }
 .src a { color: var(--male); word-break: break-word; }
 .src .extract { margin-top: 5px; }
+/* ---------- свёрнутые подробности внутри панели ----------
+   По умолчанию карточка показывает только то, что читается с одного взгляда:
+   факты, семью и снимки документов. Дословные выписки, биография, гипотезы
+   и каскад допущений лежат под заголовком, который надо раскрыть, — иначе
+   панель превращается в простыню на три экрана, и главное в ней тонет. */
+details.fold { border-top: 1px solid var(--border); }
+details.fold > summary {
+  cursor: pointer; list-style: none; padding: 11px 0 10px;
+  font-weight: 700; font-size: 14px; letter-spacing: .01em;
+  display: flex; align-items: center; gap: 9px;
+}
+details.fold > summary::-webkit-details-marker { display: none; }
+details.fold > summary::after {
+  content: "▾"; margin-left: auto; color: var(--muted);
+  transition: transform .15s ease; font-size: 12px;
+}
+details.fold[open] > summary::after { transform: rotate(180deg); }
+details.fold > summary:hover { color: var(--male); }
+details.fold .fold-body { padding-bottom: 12px; }
+.fold-hint { font-weight: 400; font-size: 12.5px; color: var(--muted); }
+
+details.fold.why > summary {
+  padding: 4px 0 3px; font-weight: 600; font-size: 12.5px; color: var(--muted);
+  white-space: nowrap; overflow: hidden;
+}
+details.fold.why > summary .fold-hint {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0;
+}
+details.fold.why { border-top: 0; }
+details.fold.why[open] > summary { color: var(--text); }
+details.fold.why .fold-body { font-size: 12.5px; color: var(--muted); padding-bottom: 6px; }
+
+/* ---------- галерея снимков документов ---------- */
+.shots { display: grid; grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: 8px; }
+.shot {
+  border: 1px solid var(--border); border-radius: 9px; overflow: hidden;
+  background: var(--surface-2); cursor: zoom-in; padding: 0; display: block;
+  aspect-ratio: 4 / 3;
+}
+.shot img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.shot:hover { border-color: var(--male); box-shadow: var(--shadow-sm); }
+.shot-cap { font-size: 11.5px; color: var(--muted); padding: 4px 6px 5px; line-height: 1.25; }
+
+/* ---------- просмотр снимка во весь экран ---------- */
+#lightbox {
+  position: fixed; inset: 0; z-index: 200; display: none;
+  background: rgba(16, 18, 22, .93); align-items: center; justify-content: center;
+}
+#lightbox.on { display: flex; }
+#lightbox img {
+  max-width: 96vw; max-height: 88vh; object-fit: contain;
+  box-shadow: 0 18px 60px rgba(0, 0, 0, .6); background: #fff;
+  cursor: grab;
+}
+#lightbox img.zoomed { max-width: none; max-height: none; cursor: grabbing; }
+#lb-bar {
+  position: fixed; left: 0; right: 0; bottom: 0; padding: 10px 16px 14px;
+  color: #e9edf3; font-size: 13px; text-align: center;
+  background: linear-gradient(transparent, rgba(0, 0, 0, .55));
+}
+#lb-bar b { color: #fff; }
+#lb-close {
+  position: fixed; top: 12px; right: 16px; z-index: 201;
+  background: rgba(255, 255, 255, .12); color: #fff; border: 0;
+  border-radius: 999px; width: 38px; height: 38px; font-size: 20px; cursor: pointer;
+}
+#lb-close:hover { background: rgba(255, 255, 255, .22); }
+
 .hyp-mini { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; margin-bottom: 9px; font-size: 13.5px; }
 .hyp-mini .claim { font-weight: 600; margin-top: 5px; }
 .empty { color: var(--muted); font-size: 13.5px; }
@@ -830,23 +953,70 @@ function marriageBetween(aId, bId) {
 /** Units directly descended from this one (the reverse of parentUnits). */
 const childUnits = u => units.filter(c => parentUnits(c).includes(u));
 
-/* 1. left-to-right order: depth-first from the youngest generation upward,
-      father's line before mother's line */
-const order = new Map();
-(function orderUnits() {
-  let seq = 0;
-  const walk = u => {
-    if (order.has(u)) return;
-    order.set(u, seq++);
-    parentUnits(u).forEach(walk);
-  };
-  [...units].sort((a, b) => a.gen - b.gen).forEach(walk);
+/* 1. ЛЕВО-ПРАВО ПО ВЕТВЯМ РОДОСЛОВНОЙ, а не по обходу в глубину.
+
+   🔴 Прежний порядок — обход в глубину с нумерацией подряд — не удерживал ветви
+   раздельно: узел линии Матвеевых мог оказаться ровно под узлом линии Савченко
+   соседнего поколения, и это читается как «родитель — ребёнок», хотя родства нет.
+   Перемешивание тем заметнее, чем больше линий; к семи фамилиям оно стало обычным.
+
+   Теперь каждому человеку считается АДРЕС ВЕТВИ: путь от субъекта вверх, где
+   на каждом шаге к отцу дописывается «0», к матери — «1». Отцовская линия целиком
+   левее материнской, её отцовская подветвь — левее её материнской, и так до конца.
+   Это классическая раскладка родословной таблицы: ветви не могут переслоиться,
+   потому что порядок задан самим родством, а не порядком обхода.
+
+   ⚠️ Кузенные браки дают человеку несколько путей (Андрей и Александра Лукиных
+   восходят к общему деду). Берём лексикографически наименьший — он же кратчайший
+   по отцовской стороне; человек встаёт один раз и в самой левой из своих ветвей.
+
+   Потомки субъекта живут под ним и нумеруются отдельным префиксом, чтобы не
+   попасть в чужую ветвь предков.                                              */
+const branchOf = {};
+(function assignBranches() {
+  // предки: обход вверх, у каждого запоминаем МИНИМАЛЬНЫЙ адрес
+  const q = [[ROOT_ID, '']];
+  while (q.length) {
+    const [pid, path] = q.shift();
+    if (branchOf[pid] !== undefined && branchOf[pid] <= path) continue;
+    branchOf[pid] = path;
+    for (const { person: par, rel } of (parentsOf[pid] || [])) {
+      q.push([par, path + (rel.parent_role === 'mother' ? '1' : '0')]);
+    }
+  }
+  // потомки: вниз от субъекта, каждый ребёнок получает свою цифру
+  const down = [[ROOT_ID, 'd']];
+  while (down.length) {
+    const [pid, path] = down.shift();
+    const kids = (childrenOf[pid] || [])
+      .map(k => byId[k.person]).filter(Boolean)
+      .sort((a, b) => String(a.birth_date || '').localeCompare(String(b.birth_date || '')));
+    kids.forEach((k, i) => {
+      const kp = path + String(i);
+      if (branchOf[k.id] !== undefined && branchOf[k.id] <= kp) return;
+      branchOf[k.id] = kp;
+      down.push([k.id, kp]);
+    });
+  }
+  // супруги без собственного адреса встают вплотную к своему партнёру
+  for (const p of VISIBLE) {
+    if (branchOf[p.id] !== undefined) continue;
+    const near = (spousesOf[p.id] || [])
+      .map(s => branchOf[s.person]).filter(x => x !== undefined).sort()[0];
+    branchOf[p.id] = near !== undefined ? near + '~' : 'zz' + p.id;
+  }
 })();
+
+/* адрес единицы — наименьший among её членов; сравнение строк даёт порядок ветвей */
+const order = new Map();
+units.forEach(u => {
+  order.set(u, u.members.map(m => branchOf[m.id] ?? 'zz').sort()[0]);
+});
 
 /* rows, oldest generation first, each ordered left to right */
 const genList = [...new Set(units.map(u => u.gen))].sort((a, b) => b - a);
 const rows = genList.map(g =>
-  units.filter(u => u.gen === g).sort((a, b) => order.get(a) - order.get(b)));
+  units.filter(u => u.gen === g).sort((a, b) => String(order.get(a)).localeCompare(String(order.get(b)))));
 
 /* 2. initial packing, then relaxation */
 for (const row of rows) {
@@ -1140,9 +1310,19 @@ function relLine(rel) {
   if (ev.length) bits.push('источники: ' + ev.map(
     e => `${e.src} (${ROLE_RU[e.role] || e.role})`).join(', '));
   if ((rel.hypotheses || []).length) bits.push('гипотезы: ' + rel.hypotheses.join(', '));
-  return `<div class="rel-line"><span class="conf ${esc(rel.confidence)}">${esc(rel.id)} — ${esc(REL_CONF[rel.confidence] || rel.confidence)}</span>${
-    bits.length ? ' · ' + esc(bits.join(' · ')) : ''}${
-    rel.notes ? `<br>${esc(rel.notes)}` : ''}</div>`;
+  /* 🔴 Заметка связи — это разбор на десять—двадцать строк: цитата документа, чем
+     подтверждено, почему осторожность осталась. Раньше она вываливалась под каждым
+     родственником целиком, и блок «Семья» из четырёх человек занимал три экрана —
+     самое важное (кто кому кем приходится) в нём тонуло. Теперь строка короткая,
+     а разбор под ней раскрывается по требованию. */
+  const head = `<span class="conf ${esc(rel.confidence)}">${esc(rel.id)} — ${
+    esc(REL_CONF[rel.confidence] || rel.confidence)}</span>${
+    bits.length ? ' · ' + esc(bits.join(' · ')) : ''}`;
+  if (!rel.notes) return `<div class="rel-line">${head}</div>`;
+  return `<div class="rel-line">${head}
+    <details class="fold why"><summary>На чём держится
+      <span class="fold-hint">${esc(String(rel.notes).replace(/\s+/g, ' ').slice(0, 44))}…</span></summary>
+      <div class="fold-body">${esc(rel.notes)}</div></details></div>`;
 }
 
 /** Hand-written free-text list: what we still want to find out about this person.
@@ -1159,6 +1339,31 @@ function wishesHTML(p) {
   return `<ul class="wishes">${items.map(w => `<li>${esc(w)}</li>`).join('')}</ul>`;
 }
 
+/* Снимки, привязанные к источнику: связь вычислена при сборке (SCANS_BY_SRC). */
+function shotsOf(pid) {
+  const out = [], seen = new Set();
+  for (const e of (byId[pid] || {}).evidence || []) {
+    for (const file of SCANS_BY_SRC[e.src] || []) {
+      if (seen.has(file)) continue;
+      seen.add(file);
+      out.push({ file, src: e.src });
+    }
+  }
+  return out;
+}
+
+function shotsHTML(pid) {
+  const shots = shotsOf(pid);
+  if (!shots.length) return '';
+  return `<h3>Документы <span class="count-pill">${shots.length}</span></h3>
+    <div class="shots">${shots.map(s => `
+      <button class="shot" data-shot="${esc(s.file)}" data-src="${esc(s.src)}"
+              title="${esc(s.src)} — открыть крупно">
+        <img loading="lazy" src="scans/thumb/${esc(s.file)}" alt="${esc(s.src)}">
+      </button>`).join('')}</div>
+    <div class="shot-cap">Нажмите на снимок, чтобы открыть его во весь экран; там же — увеличение по клику.</div>`;
+}
+
 function sourceHTML(s, ev) {
   const meta = [s.archive, s.archive_ref].filter(Boolean).join(' · ');
   const role = ev && PERSON_ROLE_RU[ev.role]
@@ -1168,7 +1373,9 @@ function sourceHTML(s, ev) {
     <div class="top"><span class="type">${esc(SRC_TYPES[s.type] || s.type)}</span>${role}
       <span class="desc">${esc(s.description)}</span></div>
     ${meta ? `<div class="meta">${esc(meta)}</div>` : ''}
-    ${s.data_extracted ? `<div class="extract">${esc(s.data_extracted)}</div>` : ''}
+    ${s.data_extracted ? `<details class="fold"><summary>Что в документе
+      <span class="fold-hint">${esc(String(s.data_extracted).replace(/\s+/g, ' ').slice(0, 60))}…</span></summary>
+      <div class="fold-body extract">${esc(s.data_extracted)}</div></details>` : ''}
     ${s.url ? `<div class="meta"><a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.url)}</a></div>` : ''}
     ${s.raw_record ? `<div class="meta">📄 дословная копия: ${esc(s.raw_record)}</div>` : ''}
     <div class="meta">${esc(s.id)}${s.date_found ? ' · найдено ' + esc(s.date_found) : ''}</div>
@@ -1232,19 +1439,29 @@ function openPerson(id) {
     <dl class="facts">${rows.join('')}</dl>
     <h3>Семья</h3>
     ${familyHTML(p)}
-    <h3>Что хотим узнать</h3>
-    ${wishesHTML(p)}
-    ${p.biography ? `<h3>Биография</h3><div class="bio">${esc(p.biography)}</div>` : ''}
-    ${p.notes ? `<h3>Заметки исследования</h3><div class="bio">${esc(p.notes)}</div>` : ''}
-    <h3>Источники (${srcs.length})</h3>
-    ${srcs.length ? srcs.map(s => sourceHTML(s, roleOf[s.id])).join('') : '<div class="empty">Источников пока нет.</div>'}
-    <h3>Гипотезы (${hyps.length})</h3>
-    ${hyps.length ? hyps.map(h => `<div class="hyp-mini">${badge(h.status)}
+    ${shotsHTML(p.id)}
+    ${p.biography ? `<details class="fold" open><summary>Биография</summary>
+      <div class="fold-body bio">${esc(p.biography)}</div></details>` : ''}
+    <details class="fold"><summary>Что хотим узнать</summary>
+      <div class="fold-body">${wishesHTML(p)}</div></details>
+    <details class="fold"><summary>Источники <span class="count-pill">${srcs.length}</span>
+      <span class="fold-hint">${srcs.length ? 'шифры, дословные выписки' : 'пока нет'}</span></summary>
+      <div class="fold-body">${srcs.length
+        ? srcs.map(s => sourceHTML(s, roleOf[s.id])).join('')
+        : '<div class="empty">Источников пока нет.</div>'}</div></details>
+    <details class="fold"><summary>Гипотезы <span class="count-pill">${hyps.length}</span>
+      <span class="fold-hint">${hyps.length ? 'версии и как их проверить' : 'пока нет'}</span></summary>
+      <div class="fold-body">${hyps.length ? hyps.map(h => `<div class="hyp-mini">${badge(h.status)}
         <div class="claim">${esc(h.claim)}</div>
         ${h.resolution ? `<div class="meta" style="margin-top:5px">${esc(h.resolution)}</div>`
                        : `<div class="meta" style="margin-top:5px"><i>Как проверить:</i> ${esc(h.how_to_resolve || '—')}</div>`}
-      </div>`).join('') : '<div class="empty">Гипотез по этому человеку нет.</div>'}
-    ${assumptionsHTML(p)}
+      </div>`).join('') : '<div class="empty">Гипотез по этому человеку нет.</div>'}</div></details>
+    ${p.notes ? `<details class="fold"><summary>Заметки исследования
+      <span class="fold-hint">ход рассуждения, оговорки, отвергнутые версии</span></summary>
+      <div class="fold-body bio">${esc(p.notes)}</div></details>` : ''}
+    <details class="fold"><summary>Каскад допущений
+      <span class="fold-hint">на чём держится родство с субъектом</span></summary>
+      <div class="fold-body">${assumptionsHTML(p)}</div></details>
   `;
   el('panel-body').scrollTop = 0;
   panel.classList.add('on');
@@ -1258,12 +1475,44 @@ function closePanel() {
   document.querySelectorAll('.card.is-active').forEach(c => c.classList.remove('is-active'));
 }
 
+/* ================= просмотр снимка во весь экран =================
+   Веб-версия скана — 2200 px: на ней рукопись читается, но лист метрической книги
+   это разворот в две страницы, и мелочь всё равно приходится приближать. Поэтому
+   по клику картинка переключается в натуральную величину и её можно таскать. */
+let lbZoom = false;
+
+function openShot(file, srcId) {
+  const s = srcById[srcId] || {};
+  el('lb-img').src = 'scans/view/' + file;
+  el('lb-img').classList.remove('zoomed');
+  lbZoom = false;
+  el('lb-bar').innerHTML = `<b>${esc(srcId)}</b> · ${esc(s.description || '')}` +
+    (s.archive_ref ? `<br>${esc(s.archive_ref)}` : '');
+  el('lightbox').classList.add('on');
+}
+
+function closeShot() {
+  el('lightbox').classList.remove('on');
+  el('lb-img').removeAttribute('src');
+}
+
 /* delegated clicks: person chips anywhere on the page open that person */
 document.addEventListener('click', e => {
+  const shot = e.target.closest('[data-shot]');
+  if (shot) { openShot(shot.dataset.shot, shot.dataset.src); return; }
   const chip = e.target.closest('[data-person]');
   if (chip) openPerson(chip.dataset.person);
 });
-document.addEventListener('keydown', e => { if (e.key === 'Escape') closePanel(); });
+el('lb-close').addEventListener('click', closeShot);
+el('lightbox').addEventListener('click', e => { if (e.target.id === 'lightbox') closeShot(); });
+el('lb-img').addEventListener('click', () => {
+  lbZoom = !lbZoom;
+  el('lb-img').classList.toggle('zoomed', lbZoom);
+});
+document.addEventListener('keydown', e => {
+  if (e.key !== 'Escape') return;
+  if (el('lightbox').classList.contains('on')) closeShot(); else closePanel();
+});
 
 /* ================= hypotheses section ================= */
 function hypHTML(h) {
@@ -1462,6 +1711,13 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 </footer>
 
 <div class="backdrop" id="backdrop"></div>
+
+<!-- просмотр снимка документа во весь экран -->
+<div id="lightbox" role="dialog" aria-label="Снимок документа">
+  <button id="lb-close" type="button" aria-label="Закрыть">✕</button>
+  <img id="lb-img" alt="">
+  <div id="lb-bar"></div>
+</div>
 <aside class="panel" id="panel" aria-label="Карточка человека">
   <div class="panel-head">
     <div>
@@ -1476,6 +1732,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 <script>
 const GRAPH_DATA = __GRAPH_JSON__;
 const SOURCES = __SOURCES_JSON__;
+const SCANS_BY_SRC = __SCANS_JSON__;   // {src_id: [файл, …]} — вычислено при сборке
 const HYPOTHESES = __HYPOTHESES_JSON__;
 __JS__
 </script>
@@ -1514,6 +1771,7 @@ replacements = {
     '__CSS__': CSS,
     '__GRAPH_JSON__': js_json(graph),
     '__SOURCES_JSON__': js_json(sources),
+    '__SCANS_JSON__': js_json(collect_scans(sources)),
     '__HYPOTHESES_JSON__': js_json(hypotheses),
     '__JS__': JS,
 }
