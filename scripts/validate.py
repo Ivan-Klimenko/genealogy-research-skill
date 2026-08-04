@@ -1621,8 +1621,12 @@ def write_status():
     add(f"- Отрицаний, полученных только поиском (правило 14 — слабые): "
         f"**{len(_weak)}** из {len(_neg)}"
         + (f" — {', '.join(_weak)}" if _weak else " — чисто"))
-    add(f"- Людей, чьё отождествление с записью утверждаем МЫ: **{len({x[0] for x in _ident})}**"
-        + (" — " + ", ".join(f"{a} ({b})" for a, b in _ident) if _ident else " — чисто"))
+    _byp = {}
+    for a, b in _ident:
+        _byp.setdefault(a, []).append(b)
+    add(f"- Людей, чьё отождествление с записью утверждаем МЫ: **{len(_byp)}**"
+        + (" — " + ", ".join(f"{a} ({', '.join(sorted(set(v)))})" for a, v in _byp.items())
+           if _byp else " — чисто"))
     add(f"- Подтверждённых связей, стоящих только на семейной памяти: **{len(_mem_only)}**"
         + (f" — {', '.join(_mem_only)}. Документа нет ни одного" if _mem_only else " — чисто"))
     add(f"- Сканов, скачанных, но не ставших документом: "
