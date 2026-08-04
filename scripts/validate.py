@@ -493,6 +493,21 @@ while stack:
         continue
     reach.add(cur)
     stack.extend(adj[cur] - reach)
+# --- ОТСОЕДИНЁННЫЕ ВЕТВИ ----------------------------------------------------
+# Люди, исследованные как кандидаты и оказавшиеся НЕ НАШИМИ. Удалять их нельзя:
+# отрицательный результат ограничивает пространство поиска не хуже находки (правило 4),
+# и вернувшийся кандидат должен натыкаться на готовый разбор, а не проходить заново.
+# Связей с корнем у них нет по определению, поэтому проверка связности их пропускает.
+detached = graph["meta"].get("detached_branches") or {}
+for pid, why in detached.items():
+    if pid not in pids:
+        errors.append(f"meta.detached_branches -> несуществующий {pid}")
+    elif not str(why).strip():
+        errors.append(f"meta.detached_branches[{pid}]: пустая причина — "
+                      "отсоединение без объяснения это тихое удаление")
+    elif by_id[pid].get("visible") is not False:
+        errors.append(f"person {pid}: отсоединённая ветвь не рисуется на полотне")
+
 superseded = {p["id"] for p in people if p.get("superseded_by")}
 for r in active:
     for side in (r.get("parent"), r.get("child"), r.get("person1"), r.get("person2")):
@@ -500,7 +515,7 @@ for r in active:
             errors.append(f"relationship {r['id']}: ведёт к заменённому узлу {side} — "
                           "связи переносятся на замену, надгробие их не держит")
 # Надгробие связей не имеет по определению, поэтому от корня недостижимо — это норма.
-unreach = sorted(pids - reach - superseded)
+unreach = sorted(pids - reach - superseded - set(detached))
 if unreach:
     errors.append(f"не связаны с корнем графа ({ROOT}): {unreach}")
 
@@ -510,7 +525,8 @@ for p in people:
         continue
     deg = len([1 for r in active
                if p["id"] in (r.get("parent"), r.get("child"), r.get("person1"), r.get("person2"))])
-    if deg == 0 and not p.get("superseded_by"):
+    if deg == 0 and not p.get("superseded_by") and p["id"] not in (
+            graph["meta"].get("detached_branches") or {}):
         errors.append(f"person {p['id']}: stub без единой связи — он ни к чему не привязан")
 
 # --- скрытые узлы ----------------------------------------------------------
@@ -534,7 +550,7 @@ while stack:
     shown.add(cur)
     stack.extend(kin_of[cur] - shown)
 # Надгробие связей не имеет и на страницу попадает по прямой ссылке — это норма.
-for pid in sorted(hidden - shown - superseded):
+for pid in sorted(hidden - shown - superseded - set(detached)):
     errors.append(f"person {pid}: visible=false и до него не дойти по родству "
                   f"ни от одного видимого человека — на страницу он не попадёт "
                   f"ни разу")
@@ -1083,6 +1099,134 @@ if "--stamp-prose" in sys.argv:
         print("  ", x)
     print()
 
+
+# --- `generation` ВЫЧИСЛЯЕТСЯ, а не назначается ----------------------------
+# Третье производное поле после счётчиков и `visible`, снятое с ручного ведения
+# (2026-08-04). Поколение целиком выводится из рёбер: родитель на единицу старше
+# ребёнка, супруги и родные братья — ровно одного. Достаточно закрепить корень.
+#
+# Раньше расхождение печаталось предупреждением на каждое ребро в отдельности,
+# и предупреждение «супруги из разных поколений» шло в каждом прогоне месяцами,
+# пока за ним не обнаружились двое бывших предков с поколениями 7 и 6 при мужьях
+# 4 и 3. Теперь противоречие внутри самого графа — ОШИБКА, потому что оно означает
+# не «раскладка некрасивая», а «рёбра между собой несовместимы».
+_gen, _q, _gconf = {ROOT: by_id[ROOT].get("generation", 0)}, deque([ROOT]), []
+_gadj = defaultdict(list)
+for r in active:
+    if r["type"] == "parent_child":
+        _gadj[r["parent"]].append((r["child"], -1))
+        _gadj[r["child"]].append((r["parent"], +1))
+    else:
+        _gadj[r["person1"]].append((r["person2"], 0))
+        _gadj[r["person2"]].append((r["person1"], 0))
+while _q:
+    _x = _q.popleft()
+    for _y, _d in _gadj[_x]:
+        _v = _gen[_x] + _d
+        if _y not in _gen:
+            _gen[_y] = _v
+            _q.append(_y)
+        elif _gen[_y] != _v:
+            _gconf.append(f"{_x}({_gen[_x]}) ↔ {_y}({_gen[_y]}, по этому ребру {_v})")
+for _c in sorted(set(_gconf)):
+    errors.append(f"поколения противоречат друг другу: {_c} — несовместимы сами рёбра, "
+                  "а не разметка")
+for p in people:
+    if p.get("superseded_by") or p["id"] in detached:
+        continue          # связей с деревом нет — поколение выводить не из чего
+    want = _gen.get(p["id"])
+    if want is not None and p.get("generation") != want:
+        errors.append(f"person {p['id']}: generation={p.get('generation')}, "
+                      f"а по рёбрам выводится {want}")
+
+# --- пересчитать generation ---------------------------------------------------
+# Поколение выводится из рёбер целиком, поэтому чинится механически. Отдельный флаг,
+# а не часть --fix-counters: перестановка одного ребра сдвигает целую ветвь, и человек
+# должен увидеть, СКОЛЬКО узлов поехало, прежде чем согласиться.
+if "--fix-generations" in sys.argv:
+    gtext = (BASE / "data" / "family_graph.yaml").read_text(encoding="utf-8")
+    moved = []
+    for p in people:
+        want = _gen.get(p["id"])
+        if want is None or p.get("generation") == want or p.get("superseded_by"):
+            continue
+        m = re.search(r"^- id: %s$" % re.escape(p["id"]), gtext, re.M)
+        nx = re.search(r"^- id: |^relationships:", gtext[m.end():], re.M)
+        a, b = m.start(), m.end() + (nx.start() if nx else len(gtext) - m.end())
+        seg = re.sub(r"^  generation: -?\d+$", f"  generation: {want}",
+                     gtext[a:b], count=1, flags=re.M)
+        gtext = gtext[:a] + seg + gtext[b:]
+        moved.append((p["id"], p.get("generation"), want))
+    (BASE / "data" / "family_graph.yaml").write_text(gtext, encoding="utf-8")
+    print(f"Поколения пересчитаны: {len(moved)} узлов")
+    for pid, was, now in moved:
+        print(f"   {pid}: {was} → {now}")
+    print()
+
+
+# --- `visible` НЕ ДОЛЖЕН РАСХОДИТЬСЯ С РОЛЬЮ ЧЕЛОВЕКА В ГРАФЕ --------------
+# Полотно древа рисует ПРЯМУЮ ЛИНИЮ: корень, его предков и потомков и их супругов.
+# Всё остальное — боковая родня, она видна в блоке «Семья» на карточках родных.
+#
+# 🔴 Зачем проверка. `visible` — производное свойство, записанное руками, а такие
+# ржавеют молча. 2026-08-04 перестройка верхушки Сундуковых (task_083) превратила
+# Павла и Андрея из предков в боковую ветвь — но флаг остался, и они висели на
+# полотне как предки ещё сутки. Ровно та же болезнь, что у счётчиков в meta
+# и у раздела «Открытые загадки»: значение выводимо, но хранится списанным.
+#
+# Расхождение — ОШИБКА, а не предупреждение: иначе артефакты копятся. Сознательное
+# исключение объявляется в meta.visibility_exceptions с причиной прямо там.
+_anc, _st = set(), [ROOT]
+while _st:
+    for _p, _ in parents_of.get(_st.pop(), []):
+        if _p not in _anc:
+            _anc.add(_p)
+            _st.append(_p)
+_desc, _st = set(), [ROOT]
+while _st:
+    for _c in children_of.get(_st.pop(), []):
+        if _c not in _desc:
+            _desc.add(_c)
+            _st.append(_c)
+_line = _anc | _desc | {ROOT}
+# ⭐ 2026-08-04, второе уточнение. Супруги берутся только у корня и его потомков.
+# Раньше брались и у предков — и правило само затаскивало на полотно женщин, чьё
+# материнство не доказано ни одним документом. Их приходилось выкидывать вручную
+# через visibility_exceptions, и трое из четырёх исключений были именно такими.
+# Настоящая мать предка сама является предком (у неё есть parent_child к следующему
+# поколению) и попадает на полотно без всякой оговорки про супругов. ⇒ Женщина на
+# полотне теперь означает «доказано, что она наша прабабушка», а не «за неё вышел
+# замуж наш прадед». Как только материнское ребро найдётся, правило вернёт её само.
+_expect = (_line | {s for x in (_desc | {ROOT}) for s in spouses_of.get(x, [])}) \
+           - superseded - set(detached)
+_exc = graph["meta"].get("visibility_exceptions") or {}
+
+# --- пересчитать visible ------------------------------------------------------
+# Тот же случай, что и generation: значение выводится из родства целиком. Отдельный
+# флаг по той же причине — перестановка ребра выводит на полотно или уводит с него
+# сразу несколько человек, и это надо видеть.
+if "--fix-visible" in sys.argv:
+    gtext = (BASE / "data" / "family_graph.yaml").read_text(encoding="utf-8")
+    flipped = []
+    for p in people:
+        if p["id"] in _exc:
+            continue
+        want = p["id"] in _expect
+        if (p.get("visible") is not False) == want:
+            continue
+        m = re.search(r"^- id: %s$" % re.escape(p["id"]), gtext, re.M)
+        nx = re.search(r"^- id: |^relationships:", gtext[m.end():], re.M)
+        a, b = m.start(), m.end() + (nx.start() if nx else len(gtext) - m.end())
+        seg = re.sub(r"^  visible: (?:true|false)$", f"  visible: {str(want).lower()}",
+                     gtext[a:b], count=1, flags=re.M)
+        gtext = gtext[:a] + seg + gtext[b:]
+        flipped.append((p["id"], want))
+    (BASE / "data" / "family_graph.yaml").write_text(gtext, encoding="utf-8")
+    print(f"Видимость пересчитана: {len(flipped)} узлов")
+    for pid, w in flipped:
+        print(f"   {pid}: {'на полотно' if w else 'с полотна'}")
+    print()
+
 if "--fix-counters" in sys.argv:
     # Правим ЧИСЛА НА МЕСТЕ регулярным выражением, а не перезаписью YAML целиком:
     # блочные скаляры, порядок ключей и комментарии в этих файлах — часть данных,
@@ -1155,81 +1299,6 @@ if _stale_prose:
                     f"`validate.py --stamp-prose {' '.join(_stale_prose[:3])}`")
 
 frontiers = sorted(p["id"] for p in people if not parents_of.get(p["id"]))
-
-# --- `generation` ВЫЧИСЛЯЕТСЯ, а не назначается ----------------------------
-# Третье производное поле после счётчиков и `visible`, снятое с ручного ведения
-# (2026-08-04). Поколение целиком выводится из рёбер: родитель на единицу старше
-# ребёнка, супруги и родные братья — ровно одного. Достаточно закрепить корень.
-#
-# Раньше расхождение печаталось предупреждением на каждое ребро в отдельности,
-# и предупреждение «супруги из разных поколений» шло в каждом прогоне месяцами,
-# пока за ним не обнаружились двое бывших предков с поколениями 7 и 6 при мужьях
-# 4 и 3. Теперь противоречие внутри самого графа — ОШИБКА, потому что оно означает
-# не «раскладка некрасивая», а «рёбра между собой несовместимы».
-_gen, _q, _gconf = {ROOT: by_id[ROOT].get("generation", 0)}, deque([ROOT]), []
-_gadj = defaultdict(list)
-for r in active:
-    if r["type"] == "parent_child":
-        _gadj[r["parent"]].append((r["child"], -1))
-        _gadj[r["child"]].append((r["parent"], +1))
-    else:
-        _gadj[r["person1"]].append((r["person2"], 0))
-        _gadj[r["person2"]].append((r["person1"], 0))
-while _q:
-    _x = _q.popleft()
-    for _y, _d in _gadj[_x]:
-        _v = _gen[_x] + _d
-        if _y not in _gen:
-            _gen[_y] = _v
-            _q.append(_y)
-        elif _gen[_y] != _v:
-            _gconf.append(f"{_x}({_gen[_x]}) ↔ {_y}({_gen[_y]}, по этому ребру {_v})")
-for _c in sorted(set(_gconf)):
-    errors.append(f"поколения противоречат друг другу: {_c} — несовместимы сами рёбра, "
-                  "а не разметка")
-for p in people:
-    if p.get("superseded_by"):
-        continue          # надгробие связей не имеет — поколение выводить не из чего
-    want = _gen.get(p["id"])
-    if want is not None and p.get("generation") != want:
-        errors.append(f"person {p['id']}: generation={p.get('generation')}, "
-                      f"а по рёбрам выводится {want}")
-
-# --- `visible` НЕ ДОЛЖЕН РАСХОДИТЬСЯ С РОЛЬЮ ЧЕЛОВЕКА В ГРАФЕ --------------
-# Полотно древа рисует ПРЯМУЮ ЛИНИЮ: корень, его предков и потомков и их супругов.
-# Всё остальное — боковая родня, она видна в блоке «Семья» на карточках родных.
-#
-# 🔴 Зачем проверка. `visible` — производное свойство, записанное руками, а такие
-# ржавеют молча. 2026-08-04 перестройка верхушки Сундуковых (task_083) превратила
-# Павла и Андрея из предков в боковую ветвь — но флаг остался, и они висели на
-# полотне как предки ещё сутки. Ровно та же болезнь, что у счётчиков в meta
-# и у раздела «Открытые загадки»: значение выводимо, но хранится списанным.
-#
-# Расхождение — ОШИБКА, а не предупреждение: иначе артефакты копятся. Сознательное
-# исключение объявляется в meta.visibility_exceptions с причиной прямо там.
-_anc, _st = set(), [ROOT]
-while _st:
-    for _p, _ in parents_of.get(_st.pop(), []):
-        if _p not in _anc:
-            _anc.add(_p)
-            _st.append(_p)
-_desc, _st = set(), [ROOT]
-while _st:
-    for _c in children_of.get(_st.pop(), []):
-        if _c not in _desc:
-            _desc.add(_c)
-            _st.append(_c)
-_line = _anc | _desc | {ROOT}
-# ⭐ 2026-08-04, второе уточнение. Супруги берутся только у корня и его потомков.
-# Раньше брались и у предков — и правило само затаскивало на полотно женщин, чьё
-# материнство не доказано ни одним документом. Их приходилось выкидывать вручную
-# через visibility_exceptions, и трое из четырёх исключений были именно такими.
-# Настоящая мать предка сама является предком (у неё есть parent_child к следующему
-# поколению) и попадает на полотно без всякой оговорки про супругов. ⇒ Женщина на
-# полотне теперь означает «доказано, что она наша прабабушка», а не «за неё вышел
-# замуж наш прадед». Как только материнское ребро найдётся, правило вернёт её само.
-_expect = (_line | {s for x in (_desc | {ROOT}) for s in spouses_of.get(x, [])}) - superseded
-_exc = graph["meta"].get("visibility_exceptions") or {}
 for p in people:
     want, have = p["id"] in _expect, p.get("visible") is not False
     if want == have:
