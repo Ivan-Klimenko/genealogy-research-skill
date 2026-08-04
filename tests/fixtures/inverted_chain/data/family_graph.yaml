@@ -34,6 +34,7 @@ people:
   - {src: src_020, role: named_directly}
   existence: probable
   notes: Однофамилец той же деревни.
+  biography_basis: 0f04d5e381af
   biography: Проверочный узел для регрессионного теста на перевёрнутую цепочку по отчествам.
   research_wishes: null
 - id: test_person
@@ -59,6 +60,7 @@ people:
   - {src: src_020, role: named_directly}
   confidence: confirmed
   notes: Пробный узел.
+  biography_basis: 368f3913471c
   biography: Пробная биография для проверки переносимости навыка.
   research_wishes: |-
     - Найти родителей

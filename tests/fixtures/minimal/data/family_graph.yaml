@@ -34,6 +34,7 @@ people:
   - {src: src_001, role: direct_knowledge}
   existence: confirmed
   notes: Пробный узел.
+  biography_basis: e6a41caf37ad
   biography: Пробная биография для проверки переносимости навыка.
   research_wishes: |-
     - Найти родителей

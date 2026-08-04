@@ -77,8 +77,32 @@ check("названа именно эта причина",
 check("существование прадеда не оспорено",
       "existence=confirmed, но ни один документ" not in msg)
 
+print("4. Надгробие: заменённый узел жив как id, но связей не держит")
+d = FIX / "superseded"
+r = run("validate.py", d)
+check("валидация проходит", "ОШИБОК НЕТ" in r.stdout, r.stdout[-300:])
+# ломаем: возвращаем надгробию связь — так выглядит незавершённое слияние
+g = d / "data" / "family_graph.yaml"
+orig = g.read_text()
+g.write_text(orig.replace("relationships: []", """relationships:
+- id: rel_001
+  type: parent_child
+  parent: staryi_uzel
+  child: test_person
+  parent_role: father
+  confidence: probable
+  evidence:
+  - {src: src_001, role: family_memory}
+  hypotheses: []
+  notes: Незавершённое слияние — связь осталась на заменённом узле."""))
+r = run("validate.py", d)
+check("связь на заменённом узле — ошибка",
+      "ведёт к заменённому узлу" in (r.stdout + r.stderr))
+g.write_text(orig)
+
 # прибираем за собой: сгенерированное в фикстурах не коммитится
-for d in (FIX / "minimal", FIX / "inverted_chain", FIX / "false_identification"):
+for d in (FIX / "minimal", FIX / "inverted_chain", FIX / "false_identification",
+          FIX / "superseded"):
     for p in (d / "STATUS.md", d / "web" / "index.html"):
         if p.is_file():
             p.unlink()

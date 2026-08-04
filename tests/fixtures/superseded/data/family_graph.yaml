@@ -1,0 +1,71 @@
+meta:
+  title: Пробный проект
+  schema_version: 2
+  model: graph
+  last_updated: '2026-08-04'
+  total_people: 2
+  stub_people: 1
+  hidden_people: 1
+  total_relationships: 0
+  generations: 0
+  root: test_person
+  visibility_exceptions: {}
+people:
+- id: staryi_uzel
+  name_ru: Иванов Карп
+  name_full: Иванов Карп Титов
+  gender: male
+  patronymic: Титов
+  maiden_name: null
+  birth_date: null
+  birth_place: null
+  death_date: null
+  death_cause: null
+  occupation: null
+  generation: 0
+  role: Заменённый узел
+  stub: true
+  visible: false
+  research_priority: 0
+  military_service: null
+  rank: null
+  awards: []
+  evidence:
+  - {src: src_001, role: family_memory}
+  existence: probable
+  superseded_by: [test_person]
+  superseded_reason: |-
+    Оказался тем же человеком, что и субъект: слиты 2026-08-04.
+    Id сохранён, потому что на него ссылаются гипотезы и задачи.
+  notes: Узел оказался тем же человеком, что и субъект.
+  biography_basis: f25dc040918f
+  biography: Проверочное надгробие для теста на слияние узлов.
+  research_wishes: null
+- id: test_person
+  name_ru: Иванов Иван
+  name_full: Иванов Иван Иванович
+  gender: male
+  patronymic: Иванович
+  maiden_name: null
+  birth_date: '1980-01-01'
+  birth_place: null
+  death_date: null
+  death_cause: null
+  occupation: null
+  generation: 0
+  role: Субъект исследования
+  stub: false
+  visible: true
+  research_priority: 1
+  military_service: null
+  rank: null
+  awards: []
+  evidence:
+  - {src: src_001, role: direct_knowledge}
+  existence: confirmed
+  notes: Пробный узел.
+  biography_basis: e6a41caf37ad
+  biography: Пробная биография для проверки переносимости навыка.
+  research_wishes: |-
+    - Найти родителей
+relationships: []

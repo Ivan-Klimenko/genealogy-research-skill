@@ -12,6 +12,7 @@ data/hypotheses.yaml, data/research_queue.yaml.
 концов ребра, канонический порядок, отсутствие циклов, согласованность пола и роли,
 и то, что confidence связи подкреплена источником.
 """
+import hashlib
 import json
 import re
 import sys
@@ -100,6 +101,19 @@ PERSON_ROLES = (
 # Существование показывают только эти. Запись об однофамильце (`identified`), описание
 # архива (`context`) и отрицание (`negative`) сами по себе не говорят, что человек был.
 EXISTENCE_ROLES = ("named_directly", "direct_knowledge", "family_memory", "patronymic")
+
+# КАК получен отрицательный результат. Правило 14 («сплошной прочёс») стоит на различии
+# «не нашли поиском» и «прочли всё»: первое почти ничего не значит — именной указатель
+# неполон и обрезает выдачу, — второе закрывает вопрос. Пока метод жил прозой, различие
+# было эпитетом; полем оно становится сравнимой величиной.
+NEGATIVE_METHODS = (
+    "search",        # запрос по индексу или строке поиска — САМОЕ СЛАБОЕ отрицание
+    "prefix_scan",   # префиксный обход API, выдача получена целиком
+    "sweep",         # сплошной прочёс дела расшифровкой (правило 14)
+    "full_dump",     # массив выгружен целиком и разобран
+    "read_through",  # прочитано глазами от начала до конца (описи, PDF)
+)
+WEAK_NEGATIVE = ("search",)
 REL_TYPES = ("parent_child", "marriage", "sibling")
 PARENT_ROLES = ("father", "mother", "parent")
 
@@ -228,6 +242,33 @@ for p in people:
     if not psrc:
         warnings.append(f"person {p['id']}: нет ни одного источника")
     p["sources"] = psrc        # производное: остальному коду и витрине нужен плоский список
+    # --- НАДГРОБИЕ: узел заменён другим, но id остаётся навсегда ---------
+    # Записи о людях объединяются и разделяются по ходу исследования: «Карп» и
+    # «Поликарп» могут оказаться одним человеком или двумя, найденная жена — не той
+    # женщиной. Раньше это означало бы, что id исчезает, а ссылки на него из гипотез,
+    # задач и текстов повисают. Поэтому id НЕ УДАЛЯЕТСЯ НИКОГДА: узел получает
+    # надгробие и теряет связи, а ссылки продолжают разрешаться.
+    sup = p.get("superseded_by")
+    if sup is not None:
+        if not isinstance(sup, list) or not sup:
+            errors.append(f"person {p['id']}: superseded_by должен быть непустым списком id "
+                          "(их несколько, если узел РАЗДЕЛЁН надвое)")
+            sup = []
+        for x in sup:
+            if x not in pids:
+                errors.append(f"person {p['id']}: superseded_by -> несуществующий {x}")
+            elif x == p["id"]:
+                errors.append(f"person {p['id']}: superseded_by ссылается сам на себя")
+        if not p.get("superseded_reason"):
+            errors.append(f"person {p['id']}: superseded_by без superseded_reason — "
+                          "замена без объяснения это тихое удаление")
+        if p["id"] == ROOT:
+            errors.append(f"person {p['id']}: корень графа не может быть заменён")
+        if p.get("visible") is not False:
+            errors.append(f"person {p['id']}: заменённый узел не рисуется на полотне")
+    elif p.get("superseded_reason"):
+        errors.append(f"person {p['id']}: superseded_reason без superseded_by")
+
     # v1-поля не должны вернуться: родство живёт только в relationships
     for dead in ("father_id", "mother_id", "spouse_id"):
         if dead in p:
@@ -452,7 +493,14 @@ while stack:
         continue
     reach.add(cur)
     stack.extend(adj[cur] - reach)
-unreach = sorted(pids - reach)
+superseded = {p["id"] for p in people if p.get("superseded_by")}
+for r in active:
+    for side in (r.get("parent"), r.get("child"), r.get("person1"), r.get("person2")):
+        if side in superseded:
+            errors.append(f"relationship {r['id']}: ведёт к заменённому узлу {side} — "
+                          "связи переносятся на замену, надгробие их не держит")
+# Надгробие связей не имеет по определению, поэтому от корня недостижимо — это норма.
+unreach = sorted(pids - reach - superseded)
 if unreach:
     errors.append(f"не связаны с корнем графа ({ROOT}): {unreach}")
 
@@ -462,7 +510,7 @@ for p in people:
         continue
     deg = len([1 for r in active
                if p["id"] in (r.get("parent"), r.get("child"), r.get("person1"), r.get("person2"))])
-    if deg == 0:
+    if deg == 0 and not p.get("superseded_by"):
         errors.append(f"person {p['id']}: stub без единой связи — он ни к чему не привязан")
 
 # --- скрытые узлы ----------------------------------------------------------
@@ -485,7 +533,8 @@ while stack:
         continue
     shown.add(cur)
     stack.extend(kin_of[cur] - shown)
-for pid in sorted(hidden - shown):
+# Надгробие связей не имеет и на страницу попадает по прямой ссылке — это норма.
+for pid in sorted(hidden - shown - superseded):
     errors.append(f"person {pid}: visible=false и до него не дойти по родству "
                   f"ни от одного видимого человека — на страницу он не попадёт "
                   f"ни разу")
@@ -631,6 +680,16 @@ for s in sources["sources"]:
     for fld in ("description", "date_found", "data_extracted"):
         if not s.get(fld):
             errors.append(f"source {s['id']}: пустое поле {fld}")
+    # Отрицание обязано сказать, КАК и ЧТО просмотрено. Иначе «не нашли» нечем взвесить.
+    if s.get("type") == "negative_result":
+        if s.get("method") not in NEGATIVE_METHODS:
+            errors.append(f"source {s['id']}: type=negative_result, но method="
+                          f"{s.get('method')!r} (допустимы {', '.join(NEGATIVE_METHODS)})")
+        if not s.get("scope"):
+            errors.append(f"source {s['id']}: отрицательный результат без scope — "
+                          "не сказано, что именно просмотрено")
+    elif s.get("method") or s.get("scope"):
+        errors.append(f"source {s['id']}: method/scope есть, а type не negative_result")
     raw = s.get("raw_record")
     if raw:
         f = BASE / raw
@@ -964,6 +1023,66 @@ def meta_block(text):
     return m.end(), (m.end() + nxt.start() if nxt else len(text))
 
 
+
+# ===========================================================================
+# ОТЧЁТ
+# ===========================================================================
+
+# --- ОТПЕЧАТОК ДАННЫХ ПОД ПРОЗОЙ -------------------------------------------
+# Биография пишется руками и неизбежно пересказывает структурные факты: даты, места,
+# документы, круг родни. Проверить прозу текстом нельзя — это доказано прототипом
+# линтера (27 сработок, почти все ложные): осмысленный текст намеренно описывает
+# ИЗМЕНЕНИЯ и рассуждения о них, и отличить «X сейчас Y» от «X был Y» — понимание
+# языка, а не сопоставление строк.
+#
+# 🔴 Поэтому текст не разбирается вовсе. Считается отпечаток тех СТРУКТУРНЫХ фактов,
+# из которых биография написана; разошёлся — текст помечен к пересмотру. Сравниваются
+# данные с данными, ложных срабатываний нет по устройству.
+def _prose_basis(p):
+    """Из чего написана биография: собственные факты человека и круг его родни."""
+    own = [str(p.get(f)) for f in ("birth_date", "birth_place", "death_date", "death_cause",
+                                   "occupation", "existence", "rank")]
+    ev = sorted(e.get("src", "") for e in (p.get("evidence") or []) if isinstance(e, dict))
+    kin = sorted(f"{r['id']}:{r['confidence']}" for r in rels
+                 if p["id"] in (r.get("parent"), r.get("child"),
+                                r.get("person1"), r.get("person2")))
+    return hashlib.sha1("|".join(own + ev + kin).encode()).hexdigest()[:12]
+
+
+
+# --- проставить отпечаток прозы (после того, как текст ПЕРЕЧИТАН человеком) --
+# Намеренно отдельная команда, а не часть --fix-counters: отпечаток означает
+# «я сверил текст с данными», и ставить его автоматически значило бы врать.
+if "--stamp-prose" in sys.argv:
+    i = sys.argv.index("--stamp-prose")
+    want_ids = [a for a in sys.argv[i + 1:] if not a.startswith("-")] or ["all"]
+    gtext = (BASE / "data" / "family_graph.yaml").read_text(encoding="utf-8")
+    stamped = []
+    for p in people:
+        if not p.get("biography"):
+            continue
+        if want_ids != ["all"] and p["id"] not in want_ids:
+            continue
+        val = _prose_basis(p)
+        if p.get("biography_basis") == val:
+            continue
+        m = re.search(r"^- id: %s$" % re.escape(p["id"]), gtext, re.M)
+        nx = re.search(r"^- id: |^relationships:", gtext[m.end():], re.M)
+        a, b = m.start(), m.end() + (nx.start() if nx else len(gtext) - m.end())
+        seg = gtext[a:b]
+        if re.search(r"^  biography_basis: .*$", seg, re.M):
+            seg = re.sub(r"^  biography_basis: .*$", f"  biography_basis: {val}", seg, flags=re.M)
+        else:
+            bm = re.search(r"^  biography: ", seg, re.M)
+            seg = seg[:bm.start()] + f"  biography_basis: {val}\n" + seg[bm.start():]
+        gtext = gtext[:a] + seg + gtext[b:]
+        stamped.append(p["id"])
+    (BASE / "data" / "family_graph.yaml").write_text(gtext, encoding="utf-8")
+    print(f"Отпечаток прозы проставлен: {len(stamped)}")
+    for x in stamped:
+        print("  ", x)
+    print()
+
 if "--fix-counters" in sys.argv:
     # Правим ЧИСЛА НА МЕСТЕ регулярным выражением, а не перезаписью YAML целиком:
     # блочные скаляры, порядок ключей и комментарии в этих файлах — часть данных,
@@ -1018,10 +1137,22 @@ for fname, meta_obj, key, fn in COUNTERS:
 gmeta = graph["meta"]
 if gmeta.get("schema_version") != 2:
     errors.append(f"meta.schema_version={gmeta.get('schema_version')!r}, ожидалось 2")
-
-# ===========================================================================
-# ОТЧЁТ
-# ===========================================================================
+_stale_prose = []
+for p in people:
+    if not p.get("biography"):
+        continue
+    want = _prose_basis(p)
+    have = p.get("biography_basis")
+    if have is None:
+        errors.append(f"person {p['id']}: есть biography, но нет biography_basis — "
+                      "отпечаток данных, по которым текст написан "
+                      "(проставить: validate.py --stamp-prose)")
+    elif have != want:
+        _stale_prose.append(p["id"])
+if _stale_prose:
+    warnings.append(f"биография написана по другим данным, стоит перечитать: "
+                    f"{', '.join(_stale_prose)} — после сверки "
+                    f"`validate.py --stamp-prose {' '.join(_stale_prose[:3])}`")
 
 frontiers = sorted(p["id"] for p in people if not parents_of.get(p["id"]))
 
@@ -1057,6 +1188,8 @@ for _c in sorted(set(_gconf)):
     errors.append(f"поколения противоречат друг другу: {_c} — несовместимы сами рёбра, "
                   "а не разметка")
 for p in people:
+    if p.get("superseded_by"):
+        continue          # надгробие связей не имеет — поколение выводить не из чего
     want = _gen.get(p["id"])
     if want is not None and p.get("generation") != want:
         errors.append(f"person {p['id']}: generation={p.get('generation')}, "
@@ -1095,7 +1228,7 @@ _line = _anc | _desc | {ROOT}
 # поколению) и попадает на полотно без всякой оговорки про супругов. ⇒ Женщина на
 # полотне теперь означает «доказано, что она наша прабабушка», а не «за неё вышел
 # замуж наш прадед». Как только материнское ребро найдётся, правило вернёт её само.
-_expect = _line | {s for x in (_desc | {ROOT}) for s in spouses_of.get(x, [])}
+_expect = (_line | {s for x in (_desc | {ROOT}) for s in spouses_of.get(x, [])}) - superseded
 _exc = graph["meta"].get("visibility_exceptions") or {}
 for p in people:
     want, have = p["id"] in _expect, p.get("visible") is not False
@@ -1483,6 +1616,11 @@ def write_status():
                              for e in (r.get("evidence") or []))]
     _ident = [(p["id"], e["hyp"]) for p in people for e in (p.get("evidence") or [])
               if isinstance(e, dict) and e.get("role") == "identified"]
+    _neg = [s for s in sources["sources"] if s.get("type") == "negative_result"]
+    _weak = [s["id"] for s in _neg if s.get("method") in WEAK_NEGATIVE]
+    add(f"- Отрицаний, полученных только поиском (правило 14 — слабые): "
+        f"**{len(_weak)}** из {len(_neg)}"
+        + (f" — {', '.join(_weak)}" if _weak else " — чисто"))
     add(f"- Людей, чьё отождествление с записью утверждаем МЫ: **{len({x[0] for x in _ident})}**"
         + (" — " + ", ".join(f"{a} ({b})" for a, b in _ident) if _ident else " — чисто"))
     add(f"- Подтверждённых связей, стоящих только на семейной памяти: **{len(_mem_only)}**"
