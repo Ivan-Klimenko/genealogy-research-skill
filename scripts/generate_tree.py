@@ -888,30 +888,22 @@ function iconsOf(p) {
   return out;
 }
 
-/* ================= tree layout =================
-   Married pairs become one "unit"; every unit sits in the row of its
-   generation and wants to be centred between the units it is linked to
-   (parents above, children below).
+/* ================= РАСКЛАДКА ДРЕВА =================
+   Супруги объединяются в одну «единицу»; единица стоит в строке своего поколения.
 
-   The ancestor graph is not a clean tree — cousins married into the family
-   (Андрей и Александра Лукиных share a grandfather), so one unit can have
-   several children in the same row.  Positions are therefore relaxed
-   iteratively instead of assigned in a single pedigree pass:
+   Два шага, оба детерминированные:
+     1. порядок слева направо — по АДРЕСУ ВЕТВИ (см. ниже): отцовская линия целиком
+        левее материнской, рекурсивно до последнего поколения;
+     2. координаты — алгоритмом Рейнгольда—Тилфорда: узел по центру своих детей,
+        поддеревья упакованы вплотную, пересечений не возникает.
 
-     1. fix a left-to-right order per row with a depth-first walk from the
-        subject (paternal branches first, then maternal);
-     2. pack each row, then repeatedly pull each unit toward the average
-        centre of its relatives and push overlapping neighbours apart,
-        keeping the order from step 1.
+   Прежде вторым шагом была итеративная релаксация «тянись к родне, растолкай
+   соседей». Она не давала ни центрирования, ни отсутствия пересечений — только
+   компромисс между силами, — и картинка заметно менялась от добавления одного
+   человека.                                                                  */
 
-   The push-apart pass runs last on every iteration, so the final positions
-   always honour the minimum gap — units can never end up on top of one
-   another.                                                                  */
-
-const SLOT_GAP = 0.5;   // empty slots kept between neighbouring units
-const RES = 16;         // grid sub-columns per slot (placement resolution)
-const PASSES = 120;     // relaxation iterations (cheap: ~17 units)
-const PULL = 0.5;       // how far a unit moves toward its relatives per pass
+const SLOT_GAP = 0.5;   // пустых слотов между соседними единицами
+const RES = 16;         // подколонок сетки на слот (точность размещения)
 
 function buildUnits() {
   const taken = new Set(), units = [], unitOf = {};
@@ -1047,27 +1039,110 @@ const genList = [...new Set(units.map(u => u.gen))].sort((a, b) => b - a);
 const rows = genList.map(g =>
   units.filter(u => u.gen === g).sort((a, b) => String(order.get(a)).localeCompare(String(order.get(b)))));
 
-/* 2. initial packing, then relaxation */
-for (const row of rows) {
-  let x = 0;
-  for (const u of row) { u.x = x; x += u.w + SLOT_GAP; }
-}
-const centre = u => u.x + u.w / 2;
-for (let pass = 0; pass < PASSES; pass++) {
-  for (const u of units) {
-    const rel = [...parentUnits(u), ...childUnits(u)];
-    if (!rel.length) continue;
-    const target = rel.reduce((a, r) => a + centre(r), 0) / rel.length - u.w / 2;
-    u.x += (target - u.x) * PULL;
+/* 2. РАСКЛАДКА РЕЙНГОЛЬДА—ТИЛФОРДА (1981), а не релаксация.
+
+   🔴 Почему заменили физику на геометрию. Прежде узлы расставлялись сто двадцать
+   итераций «тянись к среднему родственников, потом растолкай соседей». Это движок
+   компромисса: правило «ребёнок посередине родителей» было в нём лишь одной силой
+   из нескольких, и расталкивание её регулярно перебивало. Отсюда косые линии,
+   сходившиеся не туда, и картинка, менявшаяся от добавления одного человека.
+
+   Алгоритм даёт то, чего перебором сил добиться нельзя, — ГАРАНТИИ:
+     · узел стоит ровно посередине своих детей;
+     · поддеревья упакованы вплотную, но не налезают: при столкновении сдвигается
+       поддерево ЦЕЛИКОМ, а не отдельный узел;
+     · на дереве пересечений не возникает вовсе;
+     · раскладка детерминирована — одни данные дают одну и ту же картинку.
+
+   ⚠️ «Дети» здесь — в смысле отрисовки: для человека это его родительские пары
+   СВЕРХУ. Дерево растёт от корня вниз-вверх: единственный узел внизу, каждое
+   поколение выше может только расширяться. Отсюда и вид «растёт из центра».
+
+   ⚠️ Применимо потому, что граф предков у нас — чистое дерево: ни одного предка,
+   достижимого двумя путями (кузенных браков среди видимых нет), ни одного узла
+   с несколькими детьми на полотне. Появится кузенный брак — узел станет достижим
+   дважды, и его придётся либо рисовать двумя карточками, либо мириться
+   с пересечением. Защита от повторного захода ниже (`seen`) на этот случай.        */
+
+const upKids = u => parentUnits(u)
+  .slice()
+  .sort((a, b) => String(order.get(a)).localeCompare(String(order.get(b))));
+
+const subtree = new Map();          // единица -> все единицы её поддерева
+const seen = new Set();
+
+/** Раскладывает поддерево и возвращает его контур: по строке — крайние x. */
+function layoutSubtree(u) {
+  seen.add(u);
+  const mine = [u];
+  subtree.set(u, mine);
+  const kids = upKids(u).filter(k => !seen.has(k));
+
+  if (!kids.length) {
+    u.x = 0;
+    return { [u.gen]: [0, u.w] };
   }
-  // separate neighbours, sweeping right then left so the row stays compact
-  for (const row of rows) {
-    for (let i = 1; i < row.length; i++) {
-      row[i].x = Math.max(row[i].x, row[i - 1].x + row[i - 1].w + SLOT_GAP);
+
+  let contour = null;
+  for (const k of kids) {
+    const c = layoutSubtree(k);
+    if (!contour) {
+      contour = c;
+    } else {
+      // минимальный сдвиг вправо, при котором ни на одной строке нет наложения
+      let shift = 0;
+      for (const g of Object.keys(c)) {
+        if (!contour[g]) continue;
+        shift = Math.max(shift, contour[g][1] + SLOT_GAP - c[g][0]);
+      }
+      if (shift) {
+        for (const n of subtree.get(k)) n.x += shift;
+        for (const g of Object.keys(c)) c[g] = [c[g][0] + shift, c[g][1] + shift];
+      }
+      for (const g of Object.keys(c)) {
+        contour[g] = contour[g]
+          ? [Math.min(contour[g][0], c[g][0]), Math.max(contour[g][1], c[g][1])]
+          : c[g];
+      }
     }
-    for (let i = row.length - 2; i >= 0; i--) {
-      row[i].x = Math.min(row[i].x, row[i + 1].x - row[i].w - SLOT_GAP);
-    }
+    mine.push(...subtree.get(k));
+  }
+
+  // узел — ровно посередине между крайним левым и крайним правым ребёнком
+  const first = kids[0], last = kids[kids.length - 1];
+  u.x = (first.x + (last.x + last.w) - u.w) / 2;
+
+  // если сам узел выступил за контур поддетей, расширяем контур им
+  const own = [u.x, u.x + u.w];
+  contour[u.gen] = contour[u.gen]
+    ? [Math.min(contour[u.gen][0], own[0]), Math.max(contour[u.gen][1], own[1])]
+    : own;
+  return contour;
+}
+
+/* Корни леса — единицы, которые никому не приходятся родителями: самые нижние.
+   Обычно он один; лес — на случай, если у субъекта появятся братья или вторая
+   ветвь потомков. */
+{
+  const isParent = new Set();
+  units.forEach(u => parentUnits(u).forEach(pu => isParent.add(pu)));
+  const roots = units.filter(u => !isParent.has(u))
+    .sort((a, b) => String(order.get(a)).localeCompare(String(order.get(b))));
+
+  let cursor = 0;
+  for (const r of roots) {
+    if (seen.has(r)) continue;
+    const c = layoutSubtree(r);
+    const min = Math.min(...Object.values(c).map(v => v[0]));
+    const max = Math.max(...Object.values(c).map(v => v[1]));
+    const shift = cursor - min;
+    for (const n of subtree.get(r)) n.x += shift;
+    cursor += (max - min) + SLOT_GAP * 2;
+  }
+  // единицы, до которых дерево не дошло (оторванные ветви на полотне не рисуются,
+  // но подстрахуемся): в конец, по своему порядку
+  for (const u of units) {
+    if (u.x === undefined) { u.x = cursor; cursor += u.w + SLOT_GAP; }
   }
 }
 
@@ -1163,26 +1238,54 @@ function drawLinks() {
     }
   }
 
-  // parents' couple → child: the line lands on the child's card, not on the
-  // middle of the couple the child belongs to
+  /* РОДИТЕЛИ → РЕБЁНОК: СИММЕТРИЧНАЯ ВИЛКА, А НЕ ДВЕ ОТДЕЛЬНЫЕ ЛОМАНЫЕ.
+
+     🔴 Раньше каждая родительская пара вела к ребёнку собственную ломаную, и обе
+     клали горизонтальный участок на одну и ту же высоту — ровно посередине между
+     строками. У соседних детей эти участки ложились на ту же линию, и глаз сливал
+     их в одну: казалось, что связи идут «от нескольких предков к нескольким
+     потомкам», хотя каждая вела к своему.
+
+     Теперь у ребёнка один стояк вверх до рельса, а от рельса — по плечу к каждому
+     родителю. Раскладка Рейнгольда—Тилфорда ставит ребёнка ровно между родителями,
+     поэтому вилка выходит симметричной и короткой.
+
+     ⚠️ Высота рельса СМЕЩАЕТСЯ по трём уровням в пределах строки: даже правильно
+     расставленные вилки соседей могут перекрываться по горизонтали, и без разноса
+     они снова слились бы.                                                        */
+  const railStep = new Map();
+  for (const row of rows) {
+    row.forEach((u, i) => u.members.forEach(m => railStep.set(m.id, i % 3)));
+  }
+
   for (const p of VISIBLE) {
     const cb = cardBox(p.id);
     if (!cb) continue;
-    for (const pu of parentUnitsOf(p)) {
-      const node = canvas.querySelector(`.unit[data-unit="${units.indexOf(pu)}"]`);
-      if (!node) continue;
-      const pb = boxOf(node);
-      const conf = linkConfidence(pu, p);
-      const top = pb.t + pb.h;          // bottom of the parents' unit
-      const midY = (top + cb.t) / 2;
-      const r = 10;
-      const dir = Math.sign(cb.cx - pb.cx);
-      // vertical drop, rounded elbow, horizontal run, rounded elbow, drop into the child
-      const d = Math.abs(cb.cx - pb.cx) < 2
-        ? `M${pb.cx} ${top} V${cb.t}`
-        : `M${pb.cx} ${top} V${midY - r} Q${pb.cx} ${midY} ${pb.cx + dir * r} ${midY}
-           H${cb.cx - dir * r} Q${cb.cx} ${midY} ${cb.cx} ${midY + r} V${cb.t}`;
-      paths.push(`<path class="rel-${conf}" d="${d}"/>`);
+    const pus = parentUnitsOf(p)
+      .map(pu => ({ pu, node: canvas.querySelector(`.unit[data-unit="${units.indexOf(pu)}"]`) }))
+      .filter(x => x.node)
+      .map(x => ({ ...x, b: boxOf(x.node), conf: linkConfidence(x.pu, p) }))
+      .sort((a, b) => a.b.cx - b.b.cx);
+    if (!pus.length) continue;
+
+    const bottom = Math.max(...pus.map(x => x.b.t + x.b.h));
+    const gap = cb.t - bottom;
+    const rail = bottom + gap * (0.42 + 0.16 * (railStep.get(p.id) || 0));
+    const r = 9;
+    const weakestConf = weakest(pus.map(x => x.conf));
+
+    // стояк от карточки ребёнка вверх до рельса
+    paths.push(`<path class="rel-${weakestConf}" d="M${cb.cx} ${cb.t} V${rail}"/>`);
+
+    for (const { b, conf } of pus) {
+      if (Math.abs(b.cx - cb.cx) < 2) {          // родитель ровно над ребёнком
+        paths.push(`<path class="rel-${conf}" d="M${cb.cx} ${rail} V${b.t + b.h}"/>`);
+        continue;
+      }
+      const dir = Math.sign(b.cx - cb.cx);
+      // от рельса вбок к колонке родителя, скруглённый угол, вверх в низ пары
+      paths.push(`<path class="rel-${conf}" d="M${cb.cx + dir * r} ${rail}
+        H${b.cx - dir * r} Q${b.cx} ${rail} ${b.cx} ${rail - r} V${b.t + b.h}"/>`);
     }
   }
   svg.setAttribute('width', canvas.offsetWidth);
