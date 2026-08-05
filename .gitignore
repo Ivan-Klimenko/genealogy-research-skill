@@ -1,3 +1,6 @@
 __pycache__/
 *.pyc
 .DS_Store
+data/
+.yandex_cache/
+.yandex_markup/
