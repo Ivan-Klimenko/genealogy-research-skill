@@ -158,6 +158,32 @@ with tempfile.TemporaryDirectory() as tmp:
     # и обратное: настоящая сирота обязана остаться видимой, иначе признак мёртв
     check("настоящая сирота показана", "d243_sk999.jpg" in out, out[-300:])
 
+# ⚠️ ВТОРОЙ ЗАХОД, 2026-08-05: шесть ложных сирот из восьми. Первая версия ловила
+# только форму с повтором слова — «ск.13, ск.196». Живых форм ещё две: «сканы 405,
+# 522 и 523» (слово во множественном числе, дальше голый перечень) и «ск. 76, 148,
+# 164, 206» (слово один раз, дальше голые номера). Обе встречены в живых данных.
+with tempfile.TemporaryDirectory() as tmp:
+    d = Path(tmp)
+    shutil.copytree(FIX / "minimal", d, dirs_exist_ok=True)
+    src = d / "data" / "sources.yaml"
+    src.write_text(src.read_text().replace(
+        "  archive_ref: null",
+        "  archive_ref: ф.305 оп.1 д.317 сканы 405, 522 и 523; д.314 ск. 76, 148, 164"))
+    scans = d / "data" / "scans" / "originals"
+    scans.mkdir(parents=True)
+    for n in ("d317_sk405.jpg", "d317_sk522.jpg", "d317_sk523.jpg",
+              "d314_sk076.jpg", "d314_sk148.jpg", "d314_sk164.jpg", "d317_sk888.jpg"):
+        (scans / n).write_bytes(b"")
+    r = run("validate.py", d)
+    out = r.stdout + r.stderr
+    check("«сканы N, N и N» — перечень, а не один скан",
+          not any(x in out for x in ("d317_sk522.jpg", "d317_sk523.jpg")),
+          "множественное число слова не разобрано")
+    check("«ск. N, N, N» — голые номера тоже перечень",
+          not any(x in out for x in ("d314_sk148.jpg", "d314_sk164.jpg")),
+          "продолжение перечня без повтора слова не разобрано")
+    check("настоящая сирота по-прежнему видна", "d317_sk888.jpg" in out, out[-300:])
+
 print("7. Отпечаток прозы не ржавеет из-за YAML-типизации")
 
 # 🔴 НАСТОЯЩИЙ ОТКАЗ, ПОЙМАННЫЙ НА ЖИВЫХ ДАННЫХ 2026-08-05. Отпечаток биографии —
