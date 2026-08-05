@@ -66,6 +66,7 @@ rels = graph["relationships"]
 by_id = {p["id"]: p for p in people}
 pids = set(by_id)
 sids = {s["id"] for s in sources["sources"]}
+src_by_id = {s["id"]: s for s in sources["sources"]}   # для проверок, смотрящих внутрь источника
 hids = {h["id"] for h in hyps["hypotheses"]}
 _hyp_status = {h["id"]: h["status"] for h in hyps["hypotheses"]}
 
@@ -114,6 +115,18 @@ NEGATIVE_METHODS = (
     "read_through",  # прочитано глазами от начала до конца (описи, PDF)
 )
 WEAK_NEGATIVE = ("search",)
+# Маркеры отсутствия для поиска непомеченных отрицаний. Ищутся в НАЧАЛЕ описания:
+# там источник говорит, чем он является. Упоминание отсутствия в середине находки —
+# не отрицание (src_119, src_135), и такие ловятся POSITIVE_HINT.
+# Признание источника, что дойти по нему до документа нельзя. Валидатор требует
+# непустой sources у confirmed-связи, но не смотрит, ПРОВЕРЯЕМ ли этот источник:
+# пять источников проекта прямо пишут в archive_ref «шифр не выписан», и три из них
+# держали подтверждённые связи.
+NO_REF = re.compile(r"не выписан|не зафиксирован|шифра нет|не установлен[оы]? дело", re.I)
+NEG_MARKERS = re.compile(
+    r"отрицательн|не найден|не нашл|ни одн|нет ни|не значится|не встреча|отсутству|"
+    r"^0 |«?0 записей|нулев|не подтверд|не обнаруж|тупик", re.I)
+POSITIVE_HINT = re.compile(r"⭐|найден[аоы]? запись|прочитан|дословно|установлен", re.I)
 REL_TYPES = ("parent_child", "marriage", "sibling")
 PARENT_ROLES = ("father", "mother", "parent")
 
@@ -353,6 +366,26 @@ for r in rels:
             "Такая связь СВЕДЕНА нами, а не засвидетельствована")
     if not srcs and r.get("confidence") != "uncertain":
         errors.append(f"relationship {rid}: evidence пуст — допустимо только при confidence=uncertain")
+    # 🔴 Подтверждённая связь обязана быть ПРОВЕРЯЕМОЙ, а не просто снабжённой ссылкой.
+    # Пять источников проекта прямо признаются в archive_ref, что шифр не выписан,
+    # и три из них держали confirmed-связи: дойти по ним до документа нельзя никому,
+    # включая нас самих. Предупреждение, а не ошибка: бывает, что документ прочитан,
+    # а шифр потерян, — но такая связь должна быть видна.
+    # ⚠️ Спрашивать шифр у свидетельства бессмысленно: у семейной памяти его нет
+    # и не будет, и такое предупреждение никогда не гаснет. Проверка бьёт только
+    # по joint_mention — там утверждается ДОКУМЕНТ, а документ обязан быть адресуем.
+    documentary = [e for e in strong if e.get("role") == "joint_mention"]
+    if r.get("confidence") == "confirmed" and documentary and not [
+            e for e in strong if e.get("role") in ("direct_knowledge", "family_memory")]:
+        strong = documentary
+        checkable = [e["src"] for e in strong
+                     if not NO_REF.search(str((src_by_id.get(e["src"]) or {}).get("archive_ref") or ""))
+                     and str((src_by_id.get(e["src"]) or {}).get("archive_ref") or "").strip()]
+        if not checkable:
+            warnings.append(
+                f"rel {rid}: confirmed, но ни один сильный источник не проверяем — "
+                f"у всех archive_ref пуст или признаётся «шифр не выписан» "
+                f"({', '.join(e['src'] for e in strong)})")
     r["sources"] = srcs        # производное: остальному коду и витрине нужен плоский список
     for h in r.get("hypotheses", []):
         if h not in hids:
@@ -706,6 +739,18 @@ for s in sources["sources"]:
                           "не сказано, что именно просмотрено")
     elif s.get("method") or s.get("scope"):
         errors.append(f"source {s['id']}: method/scope есть, а type не negative_result")
+    else:
+        # 🔴 Половина отрицательного фонда была невидима для машины: источник целиком
+        # состоит из отсутствия, а тип стоит metric_book или web_archive — и проверка
+        # method/scope до него не доходит. Та же болезнь, что у visible и счётчиков:
+        # свойство выводимо из содержания, но проставляется руками. Признак ищет
+        # маркеры отсутствия в первых строках описания — там, где источник объявляет,
+        # ЧЕМ он является, а не упоминает отсутствие попутно.
+        head = " ".join(str(s.get("description") or "").split())[:220]
+        if NEG_MARKERS.search(head) and not POSITIVE_HINT.search(head):
+            warnings.append(f"src {s['id']}: описание объявляет отсутствие, "
+                            f"а type={s.get('type')!r} — отрицание без method/scope "
+                            f"не входит в счёт силы (правило 4): «{head[:90]}»")
     raw = s.get("raw_record")
     if raw:
         f = BASE / raw
@@ -820,7 +865,7 @@ _asym = []
 for h in hyps["hypotheses"]:
     if h["status"] == "rejected":
         continue                      # отклонённая и не должна держать рёбра
-    for rid in sorted(set(re.findall(r"rel_\d+", json.dumps(h, ensure_ascii=False)))):
+    for rid in sorted(set(re.findall(r"rel_\d+", json.dumps(h, ensure_ascii=False, default=str)))):
         if rid in _rel_ids and rid not in _confirmed_rel and h["id"] not in _rel_hyps[rid]:
             _asym.append(f"{h['id']}→{rid}")
 if _asym:
