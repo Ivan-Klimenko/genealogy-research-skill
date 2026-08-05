@@ -66,7 +66,14 @@ HANDOFF_DATE = None  # дата из имени файла отчёта; под�
 # командой `--schema` и не расходиться с реальностью.
 # ---------------------------------------------------------------------------
 SOURCE_FIELDS = ["id", "type", "archive", "archive_ref", "url", "description",
-                 "people_mentioned", "date_found", "raw_record", "data_extracted"]
+                 "people_mentioned", "date_found", "raw_record", "data_extracted",
+                 # 🔴 method и scope — не украшение отрицательного результата, а он сам
+                 # (правило 14 («сплошной прочёс»)): «не нашли поиском» и «прочли все
+                 # 336 разворотов» — утверждения разной силы. Полей тут не было, ветки
+                 # писали и то и другое прозой внутрь data_extracted, а валидатор
+                 # требовал их полями — и всякое слияние падало на ровном месте.
+                 # Измерено 2026-08-05: четыре отрицания из наряда в четыре ветки.
+                 "method", "scope"]
 SOURCE_REQUIRED = ["id", "type", "description", "date_found", "data_extracted"]
 
 HYP_FIELDS = ["id", "claim", "status", "date_created", "date_resolved",
@@ -109,6 +116,11 @@ sources:        # поля: {', '.join(SOURCE_FIELDS)}
                 # type — одно из значений meta.types в data/sources.yaml
                 # raw_record — путь от корня проекта к СУЩЕСТВУЮЩЕМУ непустому файлу
                 # people_mentioned — только id людей, УЖЕ существующих в графе
+                # 🔴 type: negative_result ОБЯЗАН нести method и scope — иначе
+                #    отрицание не сравнимо ни с чем (правило 14 («сплошной прочёс»)).
+                #    method: search | prefix_scan | sweep | full_dump | read_through
+                #    scope: что именно просмотрено — «все 336 разворотов д.238»,
+                #    а не «искал по фамилии». Прозой внутри data_extracted НЕ считается.
 hypotheses:     # поля: {', '.join(HYP_FIELDS)}
                 # обязательные: {', '.join(HYP_REQUIRED)}
                 # status: confirmed | rejected | open | needs_verification
