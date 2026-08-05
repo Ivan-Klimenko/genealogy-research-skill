@@ -248,6 +248,14 @@ def check(item, kind, existing_ids, block, people, src_ids, types, statuses):
             elif p.stat().st_size == 0:
                 bad.append(f"raw_record пуст ({raw})")
     else:
+        # 🔴 Списки обязаны быть списками. Ветка однажды отдала evidence_for одной
+        # многострочной СТРОКОЙ; здесь это прошло, валидатор промолчал, и страница
+        # древа упала при отрисовке — тихо, уже после того, как карточки нарисовались.
+        for fld in ("evidence_for", "evidence_against", "related_people", "related_sources"):
+            val = item.get(fld)
+            if val is not None and not isinstance(val, list):
+                bad.append(f"{fld} — {type(val).__name__}, а должен быть СПИСОК "
+                           "(каждый довод отдельным пунктом, а не абзацем)")
         if item.get("status") not in statuses:
             bad.append(f"неизвестный status={item.get('status')!r}")
         if item.get("status") in ("confirmed", "rejected"):

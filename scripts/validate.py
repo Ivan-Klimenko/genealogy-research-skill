@@ -770,6 +770,16 @@ for h in hyps["hypotheses"]:
     else:
         if h.get("date_resolved") or h.get("resolution"):
             errors.append(f"hyp {h['id']}: status={h['status']}, но заполнено resolution/date_resolved")
+    # 🔴 СПИСОК ДОЛЖЕН БЫТЬ СПИСКОМ. Ветка параллельного наряда отдала evidence_for
+    # многострочной СТРОКОЙ, merge_handoff это принял, валидатор промолчал — и страница
+    # древа упала при отрисовке гипотез. Падение было тихим: карточки нарисовались,
+    # а весь код после отрисовки (тема, масштаб, закрытие панели) не выполнился вовсе.
+    # Четыре разных «поломки интерфейса» оказались одной необъявленной ошибкой в данных.
+    for fld in ("evidence_for", "evidence_against", "related_people", "related_sources"):
+        val = h.get(fld)
+        if val is not None and not isinstance(val, list):
+            errors.append(f"hyp {h['id']}: {fld} — {type(val).__name__}, а должен быть список; "
+                          "строка вместо списка ломает отрисовку молча")
     if not h.get("evidence_for") and not h.get("evidence_against"):
         warnings.append(f"hyp {h['id']}: нет свидетельств ни за, ни против")
     # Одно поле — одно имя. Три синонима («resolves_with», «resolution_plan»,

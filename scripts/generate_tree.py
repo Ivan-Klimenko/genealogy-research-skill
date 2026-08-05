@@ -196,6 +196,17 @@ body {
 
 .wrap { max-width: 1240px; margin: 0 auto; padding: 0 20px; }
 
+/* ⭐ Полотно древа — единственный блок, которому колонка в 1240 px мала: при девяти
+   поколениях оно шире четырёх тысяч пикселей, и в колонке его приходилось ужимать
+   втрое. Секция древа выходит из колонки на всю ширину окна и оставляет по краям
+   ровно поля страницы. */
+.wrap > section.tree-section {
+  width: calc(100vw - 40px);
+  max-width: calc(100vw - 40px);
+  margin-left: calc(50% - 50vw + 20px);
+  margin-right: calc(50% - 50vw + 20px);
+}
+
 /* ---------- header ---------- */
 header.page {
   padding: 34px 0 20px;
@@ -277,6 +288,9 @@ h1 {
 .tree-head h2, section > h2 { font-size: 18px; margin: 0; letter-spacing: -.01em; }
 .zoom { display: flex; gap: 6px; }
 .zoom .tool-btn { padding: 5px 11px; }
+.zoom-val { font-size: 12.5px; color: var(--muted); min-width: 44px; text-align: right; }
+.tree-viewport { cursor: grab; }
+.tree-viewport .card { cursor: pointer; }
 
 .tree-viewport {
   overflow: auto;
@@ -556,6 +570,11 @@ details.fold[open] > summary::after { transform: rotate(180deg); }
 details.fold > summary:hover { color: var(--male); }
 details.fold .fold-body { padding-bottom: 12px; }
 .fold-hint { font-weight: 400; font-size: 12.5px; color: var(--muted); }
+.boot-fail {
+  background: #fde8e8; color: #7a1c1c; border-bottom: 1px solid #f3bcbc;
+  padding: 10px 20px; font-size: 13.5px;
+}
+[data-theme="dark"] .boot-fail { background: #3a1c1c; color: #ffd7d7; border-color: #5a2a2a; }
 
 details.fold.why > summary {
   padding: 4px 0 3px; font-weight: 600; font-size: 12.5px; color: var(--muted);
@@ -588,9 +607,19 @@ details.fold.why .fold-body { font-size: 12.5px; color: var(--muted); padding-bo
 #lightbox img {
   max-width: 96vw; max-height: 88vh; object-fit: contain;
   box-shadow: 0 18px 60px rgba(0, 0, 0, .6); background: #fff;
-  cursor: grab;
+  cursor: zoom-in;
 }
-#lightbox img.zoomed { max-width: none; max-height: none; cursor: grabbing; }
+/* 🔴 В увеличенном виде картинка больше экрана, и её надо ВОЗИТЬ. Раньше она просто
+   переставала помещаться, а контейнер был центрирующим флексом без прокрутки —
+   видна оставалась только середина листа, то есть ровно не та часть, ради которой
+   увеличивают. Теперь контейнер прокручиваемый, картинка прижата к левому верхнему
+   углу, и её можно тащить мышью. */
+#lightbox.zoomed { display: block; overflow: auto; overscroll-behavior: contain; }
+#lightbox.zoomed img {
+  max-width: none; max-height: none; width: auto; height: auto;
+  cursor: grab; display: block; margin: 0;
+}
+#lightbox.zoomed img.dragging { cursor: grabbing; }
 #lb-bar {
   position: fixed; left: 0; right: 0; bottom: 0; padding: 10px 16px 14px;
   color: #e9edf3; font-size: 13px; text-align: center;
@@ -1087,7 +1116,7 @@ function renderTree() {
   }).join('');
   canvas.innerHTML = svg + html;
   canvas.querySelectorAll('.card').forEach(c =>
-    c.addEventListener('click', () => openPerson(c.dataset.id)));
+    c.addEventListener('click', () => togglePerson(c.dataset.id)));
   drawLinks();
 }
 
@@ -1166,11 +1195,16 @@ function drawLinks() {
 let zoom = 1;
 let userZoomed = false;   // once the user picks a zoom, resizing stops re-fitting
 function applyZoom(z) {
-  zoom = Math.min(1.6, Math.max(0.35, z));
+  /* ⚠️ Нижняя граница была 0.35, и её не хватало: при девяти поколениях полотно шире
+     четырёх тысяч пикселей, и «по ширине» упиралось в ограничение вместо того, чтобы
+     показать всё. Теперь до 0.15 — дерево целиком помещается на экран. */
+  zoom = Math.min(2, Math.max(0.15, z));
   canvas.style.transform = `scale(${zoom})`;
   const sizer = el('sizer');
   sizer.style.width = canvas.offsetWidth * zoom + 'px';
   sizer.style.height = canvas.offsetHeight * zoom + 'px';
+  const val = el('zoom-val');
+  if (val) val.textContent = Math.round(zoom * 100) + ' %';
 }
 function fitZoom() {
   const avail = el('viewport').clientWidth - 46;
@@ -1382,6 +1416,14 @@ function sourceHTML(s, ev) {
   </div>`;
 }
 
+/** Повторный клик по тому же человеку закрывает карточку: панель ведёт себя как
+    переключатель, а не как ловушка, из которой видно только крестик. */
+function togglePerson(id) {
+  const open = el('panel').classList.contains('on');
+  const same = document.querySelector('.card.is-active')?.dataset.id === id;
+  if (open && same) closePanel(); else openPerson(id);
+}
+
 function openPerson(id) {
   const p = byId[id];
   if (!p) return;
@@ -1484,7 +1526,7 @@ let lbZoom = false;
 function openShot(file, srcId) {
   const s = srcById[srcId] || {};
   el('lb-img').src = 'scans/view/' + file;
-  el('lb-img').classList.remove('zoomed');
+  el('lightbox').classList.remove('zoomed');
   lbZoom = false;
   el('lb-bar').innerHTML = `<b>${esc(srcId)}</b> · ${esc(s.description || '')}` +
     (s.archive_ref ? `<br>${esc(s.archive_ref)}` : '');
@@ -1492,7 +1534,8 @@ function openShot(file, srcId) {
 }
 
 function closeShot() {
-  el('lightbox').classList.remove('on');
+  el('lightbox').classList.remove('on', 'zoomed');
+  lbZoom = false;
   el('lb-img').removeAttribute('src');
 }
 
@@ -1501,13 +1544,45 @@ document.addEventListener('click', e => {
   const shot = e.target.closest('[data-shot]');
   if (shot) { openShot(shot.dataset.shot, shot.dataset.src); return; }
   const chip = e.target.closest('[data-person]');
-  if (chip) openPerson(chip.dataset.person);
+  if (chip) togglePerson(chip.dataset.person);
 });
 el('lb-close').addEventListener('click', closeShot);
 el('lightbox').addEventListener('click', e => { if (e.target.id === 'lightbox') closeShot(); });
-el('lb-img').addEventListener('click', () => {
+/* Увеличение и перетаскивание. Клик переключает натуральную величину; в этом виде
+   контейнер прокручивается, и картинку можно возить мышью — как в любом просмотрщике. */
+el('lb-img').addEventListener('click', e => {
+  if (dragMoved) { dragMoved = false; return; }   // отпустили после перетаскивания
+  const box = el('lightbox'), img = el('lb-img');
   lbZoom = !lbZoom;
-  el('lb-img').classList.toggle('zoomed', lbZoom);
+  box.classList.toggle('zoomed', lbZoom);
+  if (lbZoom) {
+    // держим под курсором ту же точку, по которой кликнули
+    const r = img.getBoundingClientRect();
+    const fx = (e.clientX - r.left) / r.width, fy = (e.clientY - r.top) / r.height;
+    box.scrollLeft = fx * img.offsetWidth - box.clientWidth / 2;
+    box.scrollTop = fy * img.offsetHeight - box.clientHeight / 2;
+  }
+});
+
+let dragFrom = null, dragMoved = false;
+el('lb-img').addEventListener('mousedown', e => {
+  if (!lbZoom) return;
+  const box = el('lightbox');
+  dragFrom = { x: e.clientX, y: e.clientY, l: box.scrollLeft, t: box.scrollTop };
+  dragMoved = false;
+  el('lb-img').classList.add('dragging');
+  e.preventDefault();
+});
+addEventListener('mousemove', e => {
+  if (!dragFrom) return;
+  const box = el('lightbox');
+  box.scrollLeft = dragFrom.l - (e.clientX - dragFrom.x);
+  box.scrollTop = dragFrom.t - (e.clientY - dragFrom.y);
+  if (Math.abs(e.clientX - dragFrom.x) + Math.abs(e.clientY - dragFrom.y) > 4) dragMoved = true;
+});
+addEventListener('mouseup', () => {
+  dragFrom = null;
+  el('lb-img').classList.remove('dragging');
 });
 document.addEventListener('keydown', e => {
   if (e.key !== 'Escape') return;
@@ -1588,14 +1663,63 @@ function setTheme(t) {
   try { localStorage.setItem('klimenko-theme', t); } catch (e) {}
 }
 
-/* ================= boot ================= */
-renderStats();
-renderTree();
-renderHypotheses();
+/* ================= boot =================
+   🔴 Каждый шаг в своей ловушке. Одна необъявленная ошибка в данных (список,
+   пришедший строкой) уронила отрисовку гипотез — и вместе с ней ВСЁ, что шло
+   следом: тему, масштаб, закрытие панели. Снаружи это выглядело как четыре
+   независимые поломки интерфейса, и ни одна не указывала на причину.
+   Теперь сбойный блок остаётся пустым и говорит об этом вслух, а страница живёт. */
+function step(name, fn) {
+  try { fn(); } catch (e) {
+    console.error('[древо] шаг «' + name + '» не выполнен:', e);
+    const box = document.createElement('div');
+    box.className = 'boot-fail';
+    box.textContent = '⚠️ Блок «' + name + '» не отрисован: ' + e.message +
+      '. Остальная страница работает; причину смотрите в данных.';
+    document.body.prepend(box);
+  }
+}
+
+step('статистика', renderStats);
+step('древо', renderTree);
+step('гипотезы', renderHypotheses);
 
 el('theme-btn').addEventListener('click', () =>
   setTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'));
 el('print-btn').addEventListener('click', () => window.print());
+/* ================= возить и приближать полотно =================
+   Полотно шире четырёх тысяч пикселей: одними кнопками его не обойти. Тянуть мышью
+   по пустому месту — как в любой карте; колесо с Ctrl/⌘ приближает к точке под курсором,
+   обычное колесо оставлено странице, чтобы не отбирать привычную прокрутку. */
+(function panAndZoom() {
+  const vp = el('viewport');
+  let from = null;
+  vp.addEventListener('mousedown', e => {
+    if (e.target.closest('.card')) return;         // по карточке — открыть человека
+    from = { x: e.clientX, y: e.clientY, l: vp.scrollLeft, t: vp.scrollTop };
+    vp.style.cursor = 'grabbing';
+    e.preventDefault();
+  });
+  addEventListener('mousemove', e => {
+    if (!from) return;
+    vp.scrollLeft = from.l - (e.clientX - from.x);
+    vp.scrollTop = from.t - (e.clientY - from.y);
+  });
+  addEventListener('mouseup', () => { from = null; vp.style.cursor = ''; });
+
+  vp.addEventListener('wheel', e => {
+    if (!e.ctrlKey && !e.metaKey) return;           // обычное колесо — прокрутка страницы
+    e.preventDefault();
+    const r = vp.getBoundingClientRect();
+    const fx = (vp.scrollLeft + e.clientX - r.left) / (canvas.offsetWidth * zoom);
+    const fy = (vp.scrollTop + e.clientY - r.top) / (canvas.offsetHeight * zoom);
+    userZoomed = true;
+    applyZoom(zoom * (e.deltaY < 0 ? 1.12 : 1 / 1.12));
+    vp.scrollLeft = fx * canvas.offsetWidth * zoom - (e.clientX - r.left);
+    vp.scrollTop = fy * canvas.offsetHeight * zoom - (e.clientY - r.top);
+  }, { passive: false });
+})();
+
 el('zoom-in').addEventListener('click', () => { userZoomed = true; applyZoom(zoom + 0.15); });
 el('zoom-out').addEventListener('click', () => { userZoomed = true; applyZoom(zoom - 0.15); });
 el('zoom-fit').addEventListener('click', () => { userZoomed = false; fitZoom(); });
@@ -1675,20 +1799,23 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       биография, источники, гипотезы и цепочка допущений до вас.</span>
   </div>
 
-  <div class="tree-head">
-    <h2>Древо</h2>
-    <div class="zoom">
-      <button class="tool-btn" id="zoom-out" type="button" aria-label="Уменьшить">−</button>
-      <button class="tool-btn" id="zoom-fit" type="button">По ширине</button>
-      <button class="tool-btn" id="zoom-in" type="button" aria-label="Увеличить">+</button>
+  <section class="tree-section">
+    <div class="tree-head">
+      <h2>Древо</h2>
+      <div class="zoom">
+        <button class="tool-btn" id="zoom-out" type="button" aria-label="Уменьшить">−</button>
+        <button class="tool-btn" id="zoom-fit" type="button">По ширине</button>
+        <button class="tool-btn" id="zoom-in" type="button" aria-label="Увеличить">+</button>
+        <span class="zoom-val" id="zoom-val"></span>
+      </div>
     </div>
-  </div>
 
-  <div class="tree-viewport" id="viewport">
-    <div class="tree-sizer" id="sizer">
-      <div class="tree-canvas" id="canvas"></div>
+    <div class="tree-viewport" id="viewport">
+      <div class="tree-sizer" id="sizer">
+        <div class="tree-canvas" id="canvas"></div>
+      </div>
     </div>
-  </div>
+  </section>
 
   <section class="hyps">
     <details class="box" open>
