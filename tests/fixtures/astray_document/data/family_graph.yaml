@@ -1,0 +1,83 @@
+meta:
+  title: Пробный проект
+  schema_version: 2
+  model: graph
+  last_updated: '2026-08-04'
+  total_people: 2
+  stub_people: 0
+  hidden_people: 0
+  total_relationships: 1
+  generations: 1
+  root: test_person
+  visibility_exceptions: {}
+people:
+- id: otets_test
+  name_ru: Иванов Пётр
+  name_full: Иванов Пётр Иванович
+  gender: male
+  patronymic: Иванович
+  maiden_name: null
+  birth_date: '1950-01-01'
+  birth_place: null
+  death_date: null
+  death_cause: null
+  occupation: null
+  generation: 1
+  role: Отец субъекта
+  stub: false
+  visible: true
+  research_priority: 2
+  military_service: null
+  rank: null
+  awards: []
+  evidence:
+  - {src: src_001, role: family_memory}
+  existence: confirmed
+  notes: Пробный узел отца.
+  biography_basis: c0e0b4f22d46
+  biography: |-
+    Пробная биография отца. Нужна затем, что документ о его отцовстве в проекте есть,
+    а к ребру не привязан, — конструкция, которую стережёт тест.
+  research_wishes: |-
+    - Найти его родителей
+- id: test_person
+  name_ru: Иванов Иван
+  name_full: Иванов Иван Иванович
+  gender: male
+  patronymic: Иванович
+  maiden_name: null
+  birth_date: '1980-01-01'
+  birth_place: null
+  death_date: null
+  death_cause: null
+  occupation: null
+  generation: 0
+  role: Субъект исследования
+  stub: false
+  visible: true
+  research_priority: 1
+  military_service: null
+  rank: null
+  awards: []
+  evidence:
+  - {src: src_001, role: direct_knowledge}
+  existence: confirmed
+  notes: Пробный узел.
+  biography_basis: e6a41caf37ad
+  biography: Пробная биография для проверки переносимости навыка.
+  research_wishes: |-
+    - Найти родителей
+relationships:
+- id: rel_001
+  type: parent_child
+  parent: otets_test
+  child: test_person
+  parent_role: father
+  confidence: probable
+  evidence:
+  - {src: src_001, role: family_memory}
+  hypotheses: [hyp_001]
+  notes: |-
+    Ребро держится на семейной памяти. Документ, называющий отца и сына вместе,
+    в проекте ЕСТЬ (src_002, ф.1 оп.1 д.100 ск.42) — и к ребру не привязан.
+    Это и есть конструкция, которую стережёт тест.

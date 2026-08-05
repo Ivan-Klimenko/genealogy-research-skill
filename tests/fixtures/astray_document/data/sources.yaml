@@ -1,0 +1,24 @@
+meta:
+  total_sources: 2
+sources:
+- id: src_001
+  type: family_testimony
+  archive: Семейный архив
+  archive_ref: null
+  url: null
+  description: Опрос субъекта исследования
+  people_mentioned: [test_person]
+  date_found: '2026-08-04'
+  data_extracted: Имя, отчество и год рождения субъекта названы им самим.
+- id: src_002
+  type: metric_book
+  archive: Пробный архив
+  archive_ref: ф.1 оп.1 д.100 скан 42
+  url: null
+  description: Запись о рождении субъекта — отец и сын названы вместе
+  people_mentioned: [otets_test, test_person]
+  date_found: '2026-08-05'
+  raw_record: data/raw_records/otets_test/d100_sk042_rozhdenie.txt
+  data_extracted: |-
+    «крестьянинъ Пётръ Ивановъ и законная жена его Марія» — отец назван в графе
+    родителей вместе с сыном. Совместное упоминание (правило 1).

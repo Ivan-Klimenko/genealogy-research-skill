@@ -1,0 +1,17 @@
+meta:
+  total_hypotheses: 1
+  statuses: [confirmed, rejected, open, needs_verification]
+hypotheses:
+- id: hyp_001
+  claim: Пётр Иванов — отец субъекта исследования.
+  status: open
+  date_created: '2026-08-05'
+  date_resolved: null
+  evidence_for:
+  - Отчество субъекта — Иванович.
+  evidence_against:
+  - Документа, называющего обоих вместе, в ребре не числится.
+  related_people: [otets_test, test_person]
+  related_sources: [src_001]
+  how_to_resolve: Привязать к ребру найденную запись о рождении (src_002).
+  resolution: null

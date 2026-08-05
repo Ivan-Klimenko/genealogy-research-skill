@@ -22,6 +22,12 @@
    и «эта запись о нём»: существование прадеда доказано отчеством потомка, а найденная
    запись об однофамильце лишь отождествлена с ним нами, и это утверждение обязано
    иметь владельца-гипотезу.
+
+   Третья — `astray_document` — воспроизводит конструкцию, которая три месяца прятала
+   доказательство на виду: документ с архивным шифром, прочитанный и сохранённый
+   дословно, называющий отца и сына вместе, — и не привязанный ни к одному ребру,
+   при том что ребро между ними стоит `probable`. Тест требует, чтобы признак
+   загорелся И чтобы он ГАС после привязки: незатухающий признак — шум.
 """
 import re
 import subprocess
@@ -100,9 +106,27 @@ check("связь на заменённом узле — ошибка",
       "ведёт к заменённому узлу" in (r.stdout + r.stderr))
 g.write_text(orig)
 
+print("5. Документ лежит мимо своей связи")
+d = FIX / "astray_document"
+r = run("validate.py", d)
+check("валидация проходит", "ОШИБОК НЕТ" in r.stdout, r.stdout[-300:])
+check("непривязанный документ показан", "ДОКУМЕНТ МИМО СВЯЗИ" in r.stdout)
+check("названо именно то ребро", "rel_001 ← src_002" in r.stdout)
+# привязываем документ — признак обязан ПОГАСНУТЬ. Незатухающий признак это шум,
+# и проверять надо не только что он загорается, но и что его можно закрыть.
+g = d / "data" / "family_graph.yaml"
+orig = g.read_text()
+g.write_text(orig.replace("  - {src: src_001, role: family_memory}\n  hypotheses: [hyp_001]",
+                          "  - {src: src_001, role: family_memory}\n"
+                          "  - {src: src_002, role: joint_mention}\n  hypotheses: [hyp_001]"))
+r = run("validate.py", d)
+check("после привязки признак гаснет", "ДОКУМЕНТ МИМО СВЯЗИ" not in r.stdout,
+      r.stdout[-300:])
+g.write_text(orig)
+
 # прибираем за собой: сгенерированное в фикстурах не коммитится
 for d in (FIX / "minimal", FIX / "inverted_chain", FIX / "false_identification",
-          FIX / "superseded"):
+          FIX / "superseded", FIX / "astray_document"):
     for p in (d / "STATUS.md", d / "web" / "index.html"):
         if p.is_file():
             p.unlink()
