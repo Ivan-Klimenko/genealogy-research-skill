@@ -1208,17 +1208,17 @@ if "--stamp-prose" in sys.argv:
         if want_ids != ["all"] and p["id"] not in want_ids:
             continue
         val = _prose_basis(p)
-        if p.get("biography_basis") == val:
+        if str(p.get("biography_basis")) == val:
             continue
         m = re.search(r"^- id: %s$" % re.escape(p["id"]), gtext, re.M)
         nx = re.search(r"^- id: |^relationships:", gtext[m.end():], re.M)
         a, b = m.start(), m.end() + (nx.start() if nx else len(gtext) - m.end())
         seg = gtext[a:b]
         if re.search(r"^  biography_basis: .*$", seg, re.M):
-            seg = re.sub(r"^  biography_basis: .*$", f"  biography_basis: {val}", seg, flags=re.M)
+            seg = re.sub(r"^  biography_basis: .*$", f"  biography_basis: '{val}'", seg, flags=re.M)
         else:
             bm = re.search(r"^  biography: ", seg, re.M)
-            seg = seg[:bm.start()] + f"  biography_basis: {val}\n" + seg[bm.start():]
+            seg = seg[:bm.start()] + f"  biography_basis: '{val}'\n" + seg[bm.start():]
         gtext = gtext[:a] + seg + gtext[b:]
         stamped.append(p["id"])
     (BASE / "data" / "family_graph.yaml").write_text(gtext, encoding="utf-8")
@@ -1414,7 +1414,13 @@ for p in people:
     if not p.get("biography"):
         continue
     want = _prose_basis(p)
+    # 🔴 str(): отпечаток из одних цифр YAML читает ЧИСЛОМ, и сравнение со строкой
+    # не сходится никогда — метка «перечитать» висит вечно, а перештамповка её
+    # не снимает. Вероятность ~0.5 % на человека (sha1-префикс без букв), то есть
+    # раз на две сотни карточек. Поймано на живых данных 2026-08-05.
     have = p.get("biography_basis")
+    if have is not None:
+        have = str(have)
     if have is None:
         errors.append(f"person {p['id']}: есть biography, но нет biography_basis — "
                       "отпечаток данных, по которым текст написан "
