@@ -80,3 +80,7 @@ python ~/.claude/skills/genealogy-research/scripts/generate_tree.py
 ошибка, которая была допущена и стоила работы.
 
 Данные той семьи в этот репозиторий не входят и не входили.
+
+## Лицензия
+
+MIT — см. [LICENSE](LICENSE).
