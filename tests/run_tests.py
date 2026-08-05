@@ -34,8 +34,10 @@
    загорелся И чтобы он ГАС после привязки: незатухающий признак — шум.
 """
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
@@ -128,8 +130,36 @@ check("после привязки признак гаснет", "ДОКУМЕН
       r.stdout[-300:])
 g.write_text(orig)
 
-print("6. Проект заводится с нуля одной командой")
-import tempfile
+print("6. Шифр перечисляет сканы: «д.243 ск.13, ск.196, ск.202» — три разворота, не один")
+# Признак «скачан, но документом не стал» ловит настоящий долг, и потому обязан
+# молчать там, где долга нет. Прежняя регулярка искала пару «д.NNN … ск.NNN»
+# и видела только ПЕРВЫЙ скан каждого дела: на живом проекте 8 ложных сирот
+# из 29. Ложная тревога здесь дороже пропуска — она приучает пролистывать список.
+with tempfile.TemporaryDirectory() as tmp:
+    d = Path(tmp)
+    shutil.copytree(FIX / "minimal", d, dirs_exist_ok=True)
+    src = d / "data" / "sources.yaml"
+    src.write_text(src.read_text().replace(
+        "  archive_ref: null",
+        "  archive_ref: ф.305 оп.1 д.243 ск.13, ск.196, ск.202; ф.237 оп.73 д.723 ск.7"))
+    scans = d / "data" / "scans" / "originals"
+    scans.mkdir(parents=True)
+    for n in ("d243_sk013.jpg", "d243_sk196.jpg", "d243_sk202.jpg",
+              "d723_sk007.jpg", "d243_sk999.jpg"):
+        (scans / n).write_bytes(b"")
+    r = run("validate.py", d)
+    out = r.stdout + r.stderr
+    check("валидация проходит", "ОШИБОК НЕТ" in r.stdout, out[-300:])
+    check("продолжения перечисления не считаются сиротами",
+          "d243_sk196.jpg" not in out and "d243_sk202.jpg" not in out,
+          "скан из перечисления объявлен непроведённым")
+    check("номер дела не тянется через новый фонд",
+          "d723_sk007.jpg" not in out, "ск.7 не привязан к д.723")
+    # и обратное: настоящая сирота обязана остаться видимой, иначе признак мёртв
+    check("настоящая сирота показана", "d243_sk999.jpg" in out, out[-300:])
+
+print("7. Проект заводится с нуля одной командой")
+
 with tempfile.TemporaryDirectory() as tmp:
     d = Path(tmp)
     r = run("init_project.py", d, ".", "--root", "Иванов Пётр Сергеевич", "--birth", "1980-01-01")

@@ -774,11 +774,25 @@ for s in sources["sources"]:
 SCAN_DIR = BASE / "data" / "scans" / "originals"
 _scan_pat = re.compile(r"^d(\d{1,4})_sk(\d{1,4})(?:_[a-z0-9_]+)?$", re.I)
 if SCAN_DIR.is_dir():
+    # 🔴 Шифр перечисляет сканы, а не повторяет дело перед каждым: «д.243 ск.13,
+    # ск.196, ск.202» — один поход в архив, три разворота. Прежняя версия искала
+    # пару «д.NNN … ск.NNN» одной регуляркой и потому видела ТОЛЬКО ПЕРВЫЙ скан
+    # каждого дела, а остальные объявляла сиротами. Измерено 2026-08-05: восемь
+    # ложных сирот из двадцати девяти, и все — продолжения перечислений.
+    # Поэтому шифр читается слева направо с памятью о текущем деле: «д.NNN»
+    # запоминается, каждое следующее «ск.NNN» относится к нему. Память сбрасывает
+    # «ф.» — новый фонд означает новый шифр, и висящий номер дела к нему не тянется.
+    _ref_tok = re.compile(r"(ф\.)|д\.?\s?(\d{2,4})\b|ск(?:ан|\.)?\s?(\d{1,4})\b", re.I)
     _ref_pairs = defaultdict(list)
     for s in sources["sources"]:
-        for a, _mid, b in re.findall(r"д\.?\s?(\d{2,4})\b([^.]{0,25}?)ск(?:ан|\.)?\s?(\d{1,4})\b",
-                                     str(s.get("archive_ref", ""))):
-            _ref_pairs[(int(a), int(b))].append(s["id"])
+        _cur_delo = None
+        for _m in _ref_tok.finditer(str(s.get("archive_ref", ""))):
+            if _m.group(1):
+                _cur_delo = None
+            elif _m.group(2):
+                _cur_delo = int(_m.group(2))
+            elif _cur_delo is not None:
+                _ref_pairs[(_cur_delo, int(_m.group(3)))].append(s["id"])
     _bad_name, _orphan_scan = [], []
     for f in sorted(SCAN_DIR.iterdir()):
         if f.suffix.lower() not in (".jpg", ".jpeg", ".png"):
