@@ -33,12 +33,15 @@
    при том что ребро между ними стоит `probable`. Тест требует, чтобы признак
    загорелся И чтобы он ГАС после привязки: незатухающий признак — шум.
 """
+import json
 import re
 import shutil
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
+
+import yaml
 
 ROOT = Path(__file__).resolve().parent
 SCRIPTS = ROOT.parent / "scripts"
@@ -233,6 +236,56 @@ with tempfile.TemporaryDirectory() as tmp:
     check("древо из одного человека рисуется", r.returncode == 0, (r.stdout + r.stderr)[-200:])
     r = run("init_project.py", d, ".", "--root", "Иванов Пётр Сергеевич")
     check("повторный запуск не затирает проект", r.returncode != 0)
+
+print("9. Обрубок дела в кэше не выдаёт себя за сплошной прочёс")
+# Признак `gaps` меряет СВЯЗНОСТЬ выкаченного куска, а не ПОКРЫТИЕ дела, и три
+# скана подряд дырок не имеют. На живом проекте так и вышло: 29 дел из 109
+# печатались как полные, среди них весь ряд одного прихода, который план как раз
+# и звал прочесать. Заглянуть в титульный лист (`yandex_markup.py 295:1-3`) —
+# штатное дешёвое действие, и след от него обязан быть отличим от прочёса,
+# иначе правило 14 («сплошной прочёс») нечем применить.
+with tempfile.TemporaryDirectory() as tmp:
+    d = Path(tmp)
+    shutil.copytree(FIX / "minimal", d, dirs_exist_ok=True)
+    mk = d / "data" / ".yandex_markup"
+    (mk / "d901").mkdir(parents=True)
+    for n in (1, 2, 3):                       # обрубок: заглянули в титул
+        (mk / "d901" / f"sk{n:03d}.txt").write_text("титул", encoding="utf-8")
+    (mk / "d902").mkdir()
+    for n in (1, 2, 3, 4):                    # дело выкачано целиком
+        (mk / "d902" / f"sk{n:03d}.txt").write_text("текст", encoding="utf-8")
+    (mk / "d903").mkdir()                     # размер известен из .total, а не из sheets
+    (mk / "d903" / "sk007.txt").write_text("одна выемка из середины", encoding="utf-8")
+    (mk / "d903" / ".total").write_text("400\n", encoding="utf-8")
+    ch = d / "data" / ".yandex_cache"
+    ch.mkdir(parents=True)
+    (ch / "sheets_d901.json").write_text(
+        json.dumps([[i, f"uuid{i}", None] for i in range(1, 321)]), encoding="utf-8")
+    (ch / "sheets_d902.json").write_text(
+        json.dumps([[i, f"uuid{i}", None] for i in range(1, 5)]), encoding="utf-8")
+
+    r = run("cache_manifest.py", d)
+    out = r.stdout + r.stderr
+    check("обрубок назван частичным", "д.901 (3 из 320)" in out, out[-400:])
+    man = yaml.safe_load((d / "data" / "cache_manifest.yaml").read_text(encoding="utf-8"))
+    m901, m902, m903 = (man["markup"][k] for k in ("901", "902", "903"))
+    check("complete=false у обрубка", m901["complete"] is False)
+    check("complete=true у полного дела", m902["complete"] is True)
+    # ⚠️ Сердце теста: СТАРЫЙ признак у обрубка молчит. Если когда-нибудь
+    # complete начнут выводить из gaps, упадёт здесь.
+    check("старый признак gaps у обрубка молчит", m901["gaps"] == 0)
+    check(".total сильнее перечня листов", m903["total"] == 400 and m903["complete"] is False)
+    check("счётчики в meta разводят полные и частичные",
+          man["meta"]["cases_markup_complete"] == 1
+          and man["meta"]["cases_markup_partial"] == 2)
+    # размер неизвестен — честное «не знаю», а не бодрое «полно»
+    (mk / "d904").mkdir()
+    (mk / "d904" / "sk001.txt").write_text("x", encoding="utf-8")
+    run("cache_manifest.py", d)
+    man = yaml.safe_load((d / "data" / "cache_manifest.yaml").read_text(encoding="utf-8"))
+    check("без размера дела — complete=null, а не true",
+          man["markup"]["904"]["complete"] is None
+          and man["meta"]["cases_markup_unknown"] == 1)
 
 # прибираем за собой: сгенерированное в фикстурах не коммитится
 for d in (FIX / "minimal", FIX / "inverted_chain", FIX / "false_identification",

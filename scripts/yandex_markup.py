@@ -75,8 +75,14 @@ def dump(code, first=None, last=None, workers=4):
     """Выкачать расшифровку дела `code`. Возвращает путь к сводному файлу."""
     d = os.path.join(DEST, 'd' + code)
     os.makedirs(d, exist_ok=True)
-    lst = [r for r in sheets(inventory_map()[code], code)
-           if r[0] and (first is None or first <= r[0] <= last)]
+    allsheets = [r for r in sheets(inventory_map()[code], code) if r[0]]
+    # 🔴 Настоящий размер дела записываем ДО фильтра по диапазону — иначе он
+    # теряется, и каталог из трёх сканов становится неотличим от сплошного
+    # прочёса. Манифест кэша печатал такие обрубки полными делами, пока это
+    # не всплыло 2026-08-06; разбор — в докстринге cache_manifest.py.
+    with open(os.path.join(d, '.total'), 'w') as f:
+        f.write('%d\n' % len(allsheets))
+    lst = [r for r in allsheets if first is None or first <= r[0] <= last]
 
     def one(rec):
         num, uuid = rec[0], rec[1]

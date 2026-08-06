@@ -18,10 +18,33 @@
 ⚠️ Манифест — производное. Руками не правится никогда; расходится с диском —
 значит его просто не перегенерировали.
 
+🔴 ДВА РАЗНЫХ ПРИЗНАКА ПОЛНОТЫ, И ПУТАТЬ ИХ НЕЛЬЗЯ.
+  · `gaps`     — пропуски ВНУТРИ выкаченного диапазона: прочёс дырявый;
+  · `complete` — выкачано ли дело ЦЕЛИКОМ: прочёс не весь.
+Первый был здесь с начала, второго не было — и это стоило проекту скрытой лжи
+о собственных данных. Заглянуть в титульный лист (`yandex_markup.py 295:1-3`,
+штатный дешёвый способ узнать годы дела) оставляет каталог из трёх сканов,
+внутри себя непрерывный. Он печатался как `range: 1-3, gaps: 0` — то есть
+неотличимо от сплошного прочёса. На живом проекте таких обрубков оказалось
+28 из 108 «выкаченных» дел, и среди них весь ряд одного прихода, который план
+как раз и звал прочесать. Найдено 2026-08-06, не проверкой, а тем, что понадобилось
+открыть эти дела руками.
+⚠️ Ровно то различие, ради которого в методичке стоит правило 14 («сплошной
+прочёс»): «не нашли поиском» и «прочли всё» — утверждения разной силы,
+и признак полноты обязан их различать.
+
+Настоящий размер дела берётся, в порядке убывания надёжности:
+  ① `d<дело>/.total` — пишет `yandex_markup.py` в момент выкачки;
+  ② `data/.yandex_cache/sheets_d<дело>.json` — перечень листов, который тот же
+     скрипт кэширует, чтобы не ходить в сеть дважды;
+  ③ ничего — тогда `total: null`, `complete: null`. Честное «не знаю» лучше
+     бодрого «полно»: сеть здесь не дёргается принципиально.
+
 Запуск из корня проекта:
     python <skill>/scripts/cache_manifest.py            # перезаписать манифест
     python <skill>/scripts/cache_manifest.py --check    # только сверить, не писать
 """
+import json
 import os
 import re
 import sys
@@ -52,6 +75,36 @@ OUT = DATA / "cache_manifest.yaml"
 # по какому шаблону в нём лежат единицы хранения.
 MARKUP_DIR = DATA / ".yandex_markup"
 SCANS_DIR = DATA / "scans" / "originals"
+SHEETS_CACHE = DATA / ".yandex_cache"
+
+
+def _true_total(case_dir, code):
+    """Сколько разворотов в деле НА САМОМ ДЕЛЕ, или None, если неизвестно.
+
+    Сеть не дёргается: оба источника уже лежат на диске. `.total` пишет
+    `yandex_markup.py` при выкачке; `sheets_d<код>.json` — его же кэш перечня
+    листов, он есть у всякого дела, которое хоть раз открывали.
+    """
+    marker = case_dir / ".total"
+    if marker.is_file():
+        try:
+            n = int(marker.read_text(encoding="utf-8").strip())
+            if n > 0:
+                return n
+        except ValueError:
+            pass
+    sheets = SHEETS_CACHE / f"sheets_d{code}.json"
+    if sheets.is_file():
+        try:
+            recs = json.loads(sheets.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            return None
+        # Записи без номера листа — обложки и вкладыши, разворотами они не считаются
+        # и в выкачку не попадают (тот же фильтр стоит в yandex_markup.dump).
+        n = sum(1 for r in recs if isinstance(r, list) and r and r[0])
+        if n > 0:
+            return n
+    return None
 
 
 def scan_markup():
@@ -65,6 +118,7 @@ def scan_markup():
         m = re.fullmatch(r"d(\d+)", d.name)
         if not m:
             continue
+        code = m.group(1)
         scans = sorted(int(x.stem[2:]) for x in d.glob("sk*.txt")
                        if re.fullmatch(r"sk\d+", x.stem))
         if not scans:
@@ -72,8 +126,13 @@ def scan_markup():
         # Пропуски внутри дела важнее общего числа: «выкачано 240 из 398» и
         # «выкачано 240 подряд» — разные утверждения о полноте прочёса.
         gaps = [n for n in range(scans[0], scans[-1] + 1) if n not in set(scans)]
-        out[m.group(1)] = {
+        total = _true_total(d, code)
+        out[code] = {
             "scans": len(scans),
+            "total": total,
+            # 🔴 Не выводится из gaps и не заменяется им: непрерывный кусок
+            # из трёх сканов дырок не имеет, а делом не является.
+            "complete": None if total is None else len(scans) >= total,
             "range": f"{scans[0]}-{scans[-1]}",
             "gaps": len(gaps),
             "bytes": sum(x.stat().st_size for x in d.glob("sk*.txt")),
@@ -110,6 +169,14 @@ def build():
             ),
             "cases_markup": len(markup),
             "scans_markup": sum(v["scans"] for v in markup.values()),
+            # ⚠️ Смотреть надо на эти три, а не на cases_markup: «дело в кэше»
+            # и «дело прочёсано целиком» — разные утверждения (правило 14).
+            "cases_markup_complete": sum(1 for v in markup.values()
+                                         if v["complete"] is True),
+            "cases_markup_partial": sum(1 for v in markup.values()
+                                        if v["complete"] is False),
+            "cases_markup_unknown": sum(1 for v in markup.values()
+                                        if v["complete"] is None),
             "cases_originals": len(originals),
             "files_originals": sum(len(v) for v in originals.values()),
         },
@@ -132,8 +199,20 @@ def main():
             old = None
 
     m = fresh["meta"]
-    print(f"Кэш расшифровок: {m['cases_markup']} дел, {m['scans_markup']} разворотов")
+    print(f"Кэш расшифровок: {m['cases_markup']} дел, {m['scans_markup']} разворотов "
+          f"(целиком {m['cases_markup_complete']}, частично {m['cases_markup_partial']}, "
+          f"размер неизвестен у {m['cases_markup_unknown']})")
     print(f"Оригиналы сканов: {m['files_originals']} файлов по {m['cases_originals']} делам")
+
+    partial = {k: v for k, v in fresh["markup"].items() if v["complete"] is False}
+    if partial:
+        worst = sorted(partial.items(), key=lambda kv: kv[1]["scans"] / kv[1]["total"])
+        print(f"🔴 Выкачаны ЧАСТИЧНО: {len(partial)} дел — "
+              + ", ".join(f"д.{k} ({v['scans']} из {v['total']})" for k, v in worst[:6])
+              + (" …" if len(partial) > 6 else ""))
+        print("   Такое дело в кэше ЕСТЬ, но прочёсано НЕ ЦЕЛИКОМ, и отрицательный")
+        print("   вывод по нему силы не имеет (правило 14). Чаще всего это след от")
+        print("   заглядывания в титульный лист: `yandex_markup.py <дело>:1-3`.")
 
     incomplete = {k: v for k, v in fresh["markup"].items() if v["gaps"]}
     if incomplete:
