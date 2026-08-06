@@ -707,6 +707,58 @@ missing_from_map = sorted(pids - listed_people)
 if missing_from_map:
     warnings.append(f"resource_map: людей нет ни в одной фамилии: {missing_from_map}")
 
+# --- ПЛОЩАДКИ: как доставать, а не что где лежит -----------------------------
+# ⭐ Введено 2026-08-06. Приёмы доступа копились прозой внутри notes/scope
+# полутора сотен источников — то есть были записаны, но ненаходимы, и заход,
+# наткнувшийся на защиту от ботов, тратил полчаса заново.
+#
+# ⚠️ ГРАНИЦА С НАВЫКОМ: навык даёт СТАРТОВЫЙ набор площадок, годный любому
+# проекту; дальше каждый проект ведёт свой реестр, и он авторитетный. Обратно
+# в навык ничего не тащим — два дома у одного факта это ржавчина, а не копия.
+PLATFORM_ACCESS = ("curl", "curl_cookiejar", "browser_only", "offline")
+_platforms = rmap.get("platforms") or []
+_pf_ids = set()
+for pf in _platforms:
+    pid_ = pf.get("id")
+    if not pid_:
+        errors.append("resource_map/platforms: запись без id")
+        continue
+    if pid_ in _pf_ids:
+        errors.append(f"resource_map/platforms: дубликат id {pid_}")
+    _pf_ids.add(pid_)
+    if pf.get("access") not in PLATFORM_ACCESS:
+        errors.append(f"platform {pid_}: неизвестный access={pf.get('access')!r} "
+                      f"(допустимы {', '.join(PLATFORM_ACCESS)})")
+    for fld in ("name", "last_verified"):
+        if not pf.get(fld):
+            errors.append(f"platform {pid_}: пустое поле {fld}")
+    # 🔴 Площадка без единой записанной грабли — это не «площадка без проблем»,
+    # а площадка, с которой ещё не работали всерьёз. Пусть это будет видно.
+    if not (pf.get("quirks") or pf.get("coverage")):
+        warnings.append(f"platform {pid_}: ни quirks, ни coverage — "
+                        "либо с ней не работали, либо приёмы опять осели в прозе")
+
+# Площадка, которую давно не проверяли живьём. Доступ ломается молча:
+# у «Памяти народа» переименовали types=, и запрос стал отвечать пустотой,
+# выглядящей как «документа нет».
+if _platforms:
+    import datetime as _dt
+    _today = _dt.date.today()
+    _stale_pf = []
+    for pf in _platforms:
+        try:
+            d = _dt.date.fromisoformat(str(pf.get("last_verified")))
+        except (TypeError, ValueError):
+            errors.append(f"platform {pf.get('id')}: last_verified не дата ISO")
+            continue
+        age = (_today - d).days
+        if age > 180:
+            _stale_pf.append(f"{pf['id']} ({age} дн.)")
+    if _stale_pf:
+        warnings.append("площадки не проверялись живьём больше полугода: "
+                        + ", ".join(_stale_pf)
+                        + " — доступ ломается молча, отрицание по ним недостоверно")
+
 rule_ids = set()
 for rule in (rmap.get("discovery_rules") or []):
     if rule["id"] in rule_ids:
@@ -973,6 +1025,99 @@ for t in tasks:
         errors.append(f"task {t['id']}: status={st}, но заполнено result")
     if st in ("pending", "in_progress") and not t.get("search_plan"):
         errors.append(f"task {t['id']}: status={st}, но пустой search_plan")
+
+# --- BLOCKED_ON: ПОЧЕМУ ЗАСТРЯЛО — СТРУКТУРОЙ, А НЕ ПРОЗОЙ ------------------
+# 🔴🔴 САМАЯ ДОРОГАЯ ПРОВЕРКА ФАЙЛА, И ВОТ ПОЧЕМУ ОНА ПОЯВИЛАСЬ.
+#
+# За один день 2026-08-06 нашлось ШЕСТЬ «ложных застреваний» — задач и гипотез,
+# числившихся упёршимися, при том что ответ уже лежал в наших же данных:
+#   · hyp_1407 — «дела д.242 и д.243 ещё НЕ выкачаны»: оба были в кэше месяц;
+#   · hyp_3202 — «графа поручителей дословно не выписана»: выписана тремя днями раньше;
+#   · hyp_503  — «дела Кожла-Яла до д.237»: таких дел не существует вовсе;
+#   · hyp_062  — «в записях о браке отец жениха называется»: формуляр такой графы
+#                не имеет — 775 женихов, ни одного с отцом.
+# Ни одно не было нехваткой документа. Застревало НЕ исследование, а УТВЕРЖДЕНИЕ
+# О НАШИХ ЖЕ ДАННЫХ, записанное прозой и потому не перепроверявшееся никогда.
+# Находились они только вопросом владельца «а можно ли ещё что-то сделать?».
+#
+# ⇒ Причина блокировки описывается СТРУКТУРОЙ, и валидатор ПЕРЕЗАДАЁТ её каждый
+# прогон. Разошлось — блокировка снята, задача разблокирована.
+#
+# ⚠️ Само поле пишется рукой и потому будет ржаветь, как всё написанное руками.
+# Спасает только то, что оно ПЕРЕПРОВЕРЯЕТСЯ, а не хранится. Поле без проверки
+# было бы ещё одним значением, которому нельзя верить.
+BLOCKED_KINDS = {
+    "cache_missing",    # дело не выкачано: ref = номер дела
+    "verbatim_missing", # графа не выписана: src + column
+    "outside_range",    # вне сохранившегося ряда: parish + year
+    "not_digitized",    # не оцифровано: platform
+    "formulary_lacks",  # формуляр не называет: platform + part + field
+    "awaiting_reply",   # ждём ответа архива/ЗАГС/человека
+    "needs_eyes",       # нужно чтение оригинала глазами
+}
+_manifest = {}
+_mp = DATA / "cache_manifest.yaml"
+if _mp.exists():
+    try:
+        _manifest = (yaml.safe_load(_mp.read_text(encoding="utf-8")) or {}).get("markup") or {}
+    except yaml.YAMLError:
+        errors.append("cache_manifest.yaml: YAML не парсится")
+
+_unblocked, _bad_kind = [], []
+for t in tasks:
+    if t.get("status") not in ("pending", "in_progress", "blocked"):
+        continue
+    for b in (t.get("blocked_on") or []):
+        kind = b.get("kind")
+        if kind not in BLOCKED_KINDS:
+            _bad_kind.append(f"{t['id']}: {kind!r}")
+            continue
+        # ── дело не выкачано? сверяем с манифестом кэша ──────────────────────
+        if kind == "cache_missing":
+            ref = str(b.get("ref", "")).lstrip("дd")
+            if ref and ref in _manifest:
+                _unblocked.append(
+                    f"{t['id']}: д.{ref} ЗАЯВЛЕНО невыкачанным, а в кэше "
+                    f"{_manifest[ref]['scans']} разворотов")
+        # ── графа не выписана? ищем её в дословной копии ─────────────────────
+        elif kind == "verbatim_missing":
+            src_id, col = b.get("src"), (b.get("column") or "")
+            raw = (src_by_id.get(src_id) or {}).get("raw_record") if src_id else None
+            if raw and col:
+                f = BASE / raw
+                if f.exists() and col.lower() in f.read_text(
+                        encoding="utf-8", errors="replace").lower():
+                    _unblocked.append(
+                        f"{t['id']}: графа «{col}» ЗАЯВЛЕНА невыписанной, "
+                        f"а она есть в {raw}")
+        # ── площадка? сверяем, что она вообще известна реестру ───────────────
+        elif kind in ("not_digitized", "formulary_lacks"):
+            pf = b.get("platform")
+            if pf and _pf_ids and pf not in _pf_ids:
+                _bad_kind.append(f"{t['id']}: platform={pf!r} нет в реестре площадок")
+
+if _bad_kind:
+    errors.append("blocked_on с неизвестным kind или площадкой: "
+                  + "; ".join(_bad_kind[:8]))
+if _unblocked:
+    warnings.append(
+        "🔴🔴 ЛОЖНОЕ ЗАСТРЕВАНИЕ (%d): задача объявила блокировку, которой больше нет — "
+        "проверьте и снимайте:" % len(_unblocked))
+    for x in _unblocked[:10]:
+        warnings.append("      " + x)
+
+# Задача ожидает, но не сказала почему. Не ошибка: причина бывает просто
+# «руки не дошли». Но у задачи ВЫСШЕГО приоритета молчание подозрительно —
+# именно там копятся застревания, которых никто не перезадаёт.
+_p1_silent = [t["id"] for t in tasks
+              if t.get("status") == "pending" and t.get("priority") == 1
+              and not t.get("blocked_on")]
+if _p1_silent:
+    warnings.append(
+        f"задачи приоритета 1 без blocked_on: {len(_p1_silent)} — "
+        f"{', '.join(_p1_silent[:8])}"
+        + (" …" if len(_p1_silent) > 8 else "")
+        + ". Пока причина застревания не записана структурой, её никто не перезадаст")
 
 # --- задача, чьи гипотезы уже решены ---------------------------------------
 # ⚠️ Это ЗАМЕНА неработавшей проверке. Прежняя объявляла задачу протухшей, если id
@@ -1531,6 +1676,7 @@ print(f"Источников без people_mentioned: {len(no_people_src)} — �
       f"описи и справочники о людях вне дерева. Это норма, а не долг.")
 print(f"Ресурсов в карте: {sum(len(e.get('sources', [])) for e in rmap['eras'])} "
       f"в {len(rmap['eras'])} эпохах, {len(rmap['family_resources'])} фамилий, "
+      f"{len(_platforms)} площадок ({sum(len(p.get('quirks') or []) for p in _platforms)} записанных граблей), "
       f"{len(rmap['discovery_rules'])} правил открытия")
 print(f"Гипотез:    {len(hyps['hypotheses'])}")
 print(f"Задач в очереди: {len(tasks)}")
