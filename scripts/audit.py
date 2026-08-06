@@ -289,6 +289,99 @@ for t_ in Q:
         findings['13b. задача обосновывает себя отсоединённым гнездом — прозой'].append(
             f"{t_['id']} (p{t_.get('priority')}, {t_.get('channel')})")
 
+# --- 15/16. ОБРАТНЫЙ ИНДЕКС ПО ДЕЛАМ ----------------------------------------
+# 🔴 ЗАЧЕМ. `blocked_on` в валидаторе перезадаёт ЗАПИСАННУЮ причину застревания.
+# Но её надо сначала записать, а задачи высшего приоритета её большей частью
+# не имеют. Этот признак ловит те же ложные застревания БЕЗ blocked_on: он идёт
+# не от задачи, а от ДЕЛА.
+#
+# 🔴🔴 ПЕРВАЯ ВЕРСИЯ ДАЛА 187 СРАБОТОК И БЫЛА ПЕРЕПИСАНА В ТОТ ЖЕ ЧАС. Она
+# считала «по делу есть источник» по любому упоминанию номера в archive_ref —
+# а src_078 называет 105 дел, src_109 — 91, это СПРАВОЧНИКИ, а не находки
+# по делу. И считала «дело в кэше» при трёх выкачанных разворотах. Получался
+# ровно тот фон, о котором предупреждает сам этот файл: признак, который нельзя
+# устранить, прячет настоящие сигналы.
+#
+# Теперь два фильтра, и оба про смысл, а не про порог ради порога:
+#   · источник, называющий больше восьми дел, — это опись или указатель, и он
+#     НЕ считается разбором дела;
+#   · дело считается прочёсываемым от 50 выкачанных разворотов: меньше — это
+#     проба, а не сплошной прочёс (правило 14).
+WIDE_SRC = 8          # больше стольких дел в archive_ref — справочник, не находка
+SWEEPABLE = 50        # меньше стольких разворотов в кэше — проба, не прочёс
+
+MANIFEST = {}
+_mf = B / 'data' / 'cache_manifest.yaml'
+if _mf.exists():
+    try:
+        MANIFEST = (yaml.safe_load(_mf.read_text(encoding='utf-8')) or {}).get('markup') or {}
+    except yaml.YAMLError:
+        MANIFEST = {}
+
+CASE_SRC = collections.defaultdict(set)      # дело → источники, СДЕЛАННЫЕ по нему
+for s in S.values():
+    cases = case_numbers(str(s.get('archive_ref') or ''))
+    if not cases or len(cases) > WIDE_SRC:
+        continue
+    for n in cases:
+        CASE_SRC[n].add(s['id'])
+
+if MANIFEST:
+    SWEPT = {int(k) for k, v in MANIFEST.items() if v['scans'] >= SWEEPABLE}
+
+    # ── 15. дело выкачано целиком, а разобранных находок по нему нет ────────
+    # Это и есть «выкачали и не прочли»: сплошной прочёс возможен, стоит ноль,
+    # а результата в проекте не появилось.
+    for n in sorted(SWEPT):
+        if CASE_SRC[n]:
+            continue
+        who = []
+        for t_ in Q:
+            if t_.get('status') not in ('pending', 'in_progress', 'blocked'):
+                continue
+            txt = ' '.join(str(t_.get(f) or '') for f in ('goal', 'what_we_know'))
+            txt += ' ' + ' '.join(map(str, t_.get('search_plan') or []))
+            if n in case_numbers(txt):
+                who.append(t_['id'])
+        findings['15. дело выкачано целиком, а находок по нему нет'].append(
+            f"д.{n}: {MANIFEST[str(n)]['scans']} разворотов в кэше, источников по делу ноль"
+            + (f"; на дело ссылаются {', '.join(who[:4])}" if who else ''))
+
+    # ── 16. план гипотезы зовёт качать то, что уже выкачано ─────────────────
+    # Ровно случай hyp_1407: «д.242 и д.243 ещё НЕ выкачаны — около 750 разворотов,
+    # полчаса работы», при том что оба лежали в кэше месяц.
+    # ⚠️ ФРАЗУ НАДО ПРИВЯЗАТЬ К ДЕЛУ, А НЕ К ПОЛЮ. Первая версия искала фразу
+    # по всему тексту и метила ВСЕ дела, в нём названные. На hyp_2102 это дало
+    # десять ложных срабатываний: «не выкачанное» относилось к д.203, а помечены
+    # оказались д.206—215, которые тот же план прямо называет выкачанными.
+    # ⇒ Дела берутся только из ОКНА вокруг фразы.
+    NEEDS_DL = re.compile(r'не\s+выкачан|предстоит\s+выкачать|надо\s+выкачать|'
+                          r'нужно\s+выкачать|не\s+прочёсан', re.I)
+    WINDOW = 150
+
+    def _claims_undownloaded(txt):
+        """Дела, про которые ТЕКСТ РЯДОМ говорит «не выкачано»."""
+        out = set()
+        for m in NEEDS_DL.finditer(txt):
+            lo = max(0, m.start() - WINDOW)
+            out |= case_numbers(txt[lo:m.end() + WINDOW])
+        return out
+
+    for h in H.values():
+        if h.get('status') not in ('open', 'needs_verification'):
+            continue
+        for n in sorted(_claims_undownloaded(str(h.get('how_to_resolve') or '')) & SWEPT):
+            findings['16. план зовёт выкачать дело, которое уже в кэше'].append(
+                f"{h['id']}: д.{n} — {MANIFEST[str(n)]['scans']} разворотов уже выкачано")
+    for t_ in Q:
+        if t_.get('status') not in ('pending', 'in_progress', 'blocked'):
+            continue
+        txt = ' '.join(str(t_.get(f) or '') for f in ('goal', 'what_we_know'))
+        txt += ' ' + ' '.join(map(str, t_.get('search_plan') or []))
+        for n in sorted(_claims_undownloaded(txt) & SWEPT):
+            findings['16. план зовёт выкачать дело, которое уже в кэше'].append(
+                f"{t_['id']}: д.{n} — {MANIFEST[str(n)]['scans']} разворотов уже выкачано")
+
 # --- 14. люди без единого сильного основания существования -------------------
 STRONG = {'named_directly', 'direct_knowledge', 'family_memory', 'patronymic'}
 for p in G['people']:
