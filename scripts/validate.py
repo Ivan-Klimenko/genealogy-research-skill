@@ -810,9 +810,13 @@ for s in sources["sources"]:
             errors.append(f"source {s['id']}: raw_record -> файла нет ({raw})")
         elif not f.read_text(encoding="utf-8").strip():
             errors.append(f"source {s['id']}: raw_record пуст ({raw})")
-        elif f.parts[-2] not in pids:
+        elif f.parts[-2] not in pids and f.parts[-2] != "_project":
+            # ⭐ `_project` — оговорённый каталог для находок НЕ О ЧЕЛОВЕКЕ: прейскурант
+            # архива, состав фонда, способ обхода площадки. Класть их в папку человека
+            # значит соврать о том, чьи они. Заведён 2026-08-07 на прейскуранте ЦГАКО.
             warnings.append(f"source {s['id']}: raw_record лежит в каталоге {f.parts[-2]}, "
-                            f"которого нет среди id людей")
+                            f"которого нет среди id людей (для находок не о человеке "
+                            f"есть оговорённый каталог raw_records/_project/)")
 
 # --- сканы: связь с источником ВЫЧИСЛЯЕТСЯ, а не хранится -------------------
 # Имя файла обязано быть `d<дело>_sk<скан>[_что_на_нём].jpg`, и этого достаточно:
@@ -1267,13 +1271,21 @@ integrated = {s for p in people for s in p.get("sources", [])}
 integrated |= {s for r in rels for s in (r.get("sources") or [])}
 integrated |= {s for h in hyps["hypotheses"] for s in h.get("related_sources", [])}
 integrated |= set(re.findall(r"src_\d+", blob_graph + blob_hyp))
+# ⭐ Карта ресурсов — ТРЕТИЙ законный дом находки. Не всякая находка о человеке:
+# прейскурант архива, способ обхода SPA, состав фонда — это сведения о ПЛОЩАДКЕ,
+# и проводятся они в resource_map, а не в граф. Пока сюда не смотрели, счётчик
+# показывал такую находку непроведённой навсегда, то есть становился фоном.
+# Найдено 2026-08-07 на прейскуранте ЦГАКО.
+# ⚠️ Очередь задач сюда НЕ входит намеренно: упоминание источника в плане —
+# это не проведение (правило 17 «упомянут ≠ проведён»).
+integrated |= set(re.findall(r"src_\d+", blob_map))
 unintegrated = sorted(s["id"] for s in sources["sources"]
                       if s.get("raw_record") and s["id"] not in integrated)
 if unintegrated:
     warnings.append(
         f"🔴 НЕПРОВЕДЁННЫЕ НАХОДКИ ({len(unintegrated)}): документ прочитан и скопирован "
-        f"в raw_records, но на него не ссылается ни человек, ни связь, ни гипотеза — "
-        f"{unintegrated}. Находка есть, а в графе её нет.")
+        f"в raw_records, но на него не ссылается ни человек, ни связь, ни гипотеза, "
+        f"ни карта ресурсов — {unintegrated}. Находка есть, а в графе её нет.")
     orphan_src = [s for s in orphan_src if s not in unintegrated]
 
 if orphan_src:
