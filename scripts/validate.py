@@ -61,6 +61,12 @@ sources = load("sources.yaml")
 hyps = load("hypotheses.yaml")
 queue = load("research_queue.yaml")
 
+# ⭐ Разбор ошибок по классам. Файл НЕОБЯЗАТЕЛЕН: проект, который его ещё
+# не завёл, должен работать как прежде. Но если он есть — проверяется строго.
+errlog = None
+if (BASE / "data" / "error_log.yaml").exists():
+    errlog = load("error_log.yaml")
+
 people = graph["people"]
 rels = graph["relationships"]
 by_id = {p["id"]: p for p in people}
@@ -1183,6 +1189,55 @@ if _ap.exists():
 else:
     warnings.append("data/ACTION_PLAN.md отсутствует")
 
+# --- КЛАССЫ ОШИБОК (error_log.yaml) ------------------------------------------
+# 🔴 ЧТО ЗДЕСЬ ПРОВЕРЯЕТСЯ, А ЧТО НАМЕРЕННО НЕТ.
+# Проверяется ЦЕЛОСТНОСТЬ того, что мы сами решили создать: у класса есть чем
+# ловить и что прочёсано, у незакрытого класса есть ход, ссылка err_NNN
+# разрешается. Это объективные свойства структуры.
+#
+# 🔴 НЕ ПРОВЕРЯЕТСЯ ПРОЗА, И ЭТО РЕШЕНИЕ, А НЕ НЕДОРАБОТКА. Соблазн велик:
+# в данных 113 объектов написаны языком исправления («отозвано», «оказалось
+# неверно», «поправка»), и ни один не связан с классом. Но сделай это ошибкой —
+# и дешевле всего станет НЕ ПИСАТЬ «отозвано». Привычка писать о своих ошибках
+# честно существует ровно потому, что за неё ничего не бывает; поставив на неё
+# ворота, мы уничтожим след, по которому и считаем. Поэтому язык исправления
+# идёт в витрину ЧИСЛОМ, а не в ошибки.
+ERR_STATUS = ("open", "partial", "swept")
+eids = set()
+if errlog is not None:
+    classes = errlog.get("classes") or []
+    for c in classes:
+        cid = c.get("id")
+        if not cid or not re.fullmatch(r"err_\d+", str(cid)):
+            errors.append(f"error_log: класс без корректного id: {cid!r}")
+            continue
+        if cid in eids:
+            errors.append(f"error_log: id {cid} повторяется")
+        eids.add(cid)
+        st = c.get("status")
+        if st not in ERR_STATUS:
+            errors.append(f"error_log {cid}: status={st!r}, ожидается {ERR_STATUS}")
+        # 🔴 Без detector это не разбор, а сожаление: нечем найти остальные такие же.
+        if not str(c.get("detector") or "").strip():
+            errors.append(f"error_log {cid}: пустой detector — класс без исполнимой "
+                          f"проверки не находит остальные такие же места")
+        if not str(c.get("contaminated") or "").strip():
+            errors.append(f"error_log {cid}: пустой contaminated — не сказано, что "
+                          f"могло быть выведено неверно и прочёсано ли это")
+        # ⭐ Ход обязателен ровно там же, где он обязателен у гипотезы, держащей
+        # слабое ребро: незаконченный прочёс без задачи умирает молча.
+        moves = c.get("moves") or []
+        if st in ("open", "partial"):
+            live = [m for m in moves
+                    if m in {t_["id"] for t_ in tasks
+                             if t_.get("status") in ("pending", "in_progress", "blocked")}]
+            if not live:
+                errors.append(f"error_log {cid}: status={st}, а живого хода нет — "
+                              f"впишите в `moves` задачу, которая доведёт прочёс")
+        for m in moves:
+            if m not in {t_["id"] for t_ in tasks}:
+                errors.append(f"error_log {cid}: moves -> несуществующая задача {m}")
+
 # --- перекрёстные упоминания hyp_XXX / src_XXX в текстах -------------------
 blob_graph = json.dumps(graph, ensure_ascii=False)
 blob_src = json.dumps(sources, ensure_ascii=False)
@@ -1198,6 +1253,10 @@ for label, blob in (("family_graph.yaml", blob_graph), ("sources.yaml", blob_src
     for ref in sorted(set(re.findall(r"src_\d+", blob))):
         if ref not in sids:
             errors.append(f"{label}: текст ссылается на несуществующий источник {ref}")
+    if errlog is not None:
+        for ref in sorted(set(re.findall(r"err_\d+", blob))):
+            if ref not in eids:
+                errors.append(f"{label}: текст ссылается на несуществующий класс ошибки {ref}")
 for ref in sorted(set(re.findall(r"rel_\d+", blob_graph + blob_map + blob_queue))):
     if ref not in {r["id"] for r in rels}:
         errors.append(f"текст ссылается на несуществующую связь {ref}")
@@ -2070,6 +2129,49 @@ def write_status():
             add("")
 
     # --- 5. Долги ----------------------------------------------------------
+    # ── ОШИБКИ: КЛАССЫ И ЗАРАЖЕНИЕ ──────────────────────────────────────────
+    # 🔴 Раздел отвечает на вопрос, который иначе задаёт только человек и только
+    # иногда: «сколько уже сделанных выводов может стоять на приёме, который
+    # однажды подвёл». Ответ — числом, которое ПЕРЕСЧИТЫВАЕТСЯ.
+    if errlog is not None:
+        cl = errlog.get("classes") or []
+        add("## Ошибки: классы и заражение")
+        add("")
+        add("Разбор ошибки, кончающийся намерением быть внимательнее, не стоит ничего.")
+        add("У класса обязаны быть `detector` — чем найти остальные такие же — и")
+        add("`contaminated` — что могло быть выведено неверно и прочёсано ли это.")
+        add("")
+        add("| Класс | Что за приём | Состояние | Ход |")
+        add("|---|---|---|---|")
+        MARK = {"swept": "🟢 прочёсан", "partial": "⚠️ прочёсан частично", "open": "🔴 не прочёсан"}
+        for c in sorted(cl, key=lambda x: (x.get("status") != "open", x.get("id"))):
+            mv = ", ".join(f"`{m}`" for m in (c.get("moves") or [])) or "—"
+            add(f"| `{c['id']}` | {str(c.get('name') or '').strip()} | "
+                f"{MARK.get(c.get('status'), c.get('status'))} | {mv} |")
+        add("")
+        # ⭐ ЯЗЫК ИСПРАВЛЕНИЯ — СЧЁТЧИК, А НЕ ВОРОТА. Считаем объекты, чья проза
+        # признаётся в исправлении, и сколько из них связаны с классом ошибки.
+        # Ворот здесь нет намеренно: сделай это ошибкой — и дешевле станет
+        # не писать «отозвано», то есть исчезнет сам след, по которому считаем.
+        _fix = re.compile(r"отозв|отменен|отменён|оказал\w+ невер|оказал\w+ ошибоч|"
+                          r"была невер|было невер|поправка к|ошибочн\w+|"
+                          r"не выдержал\w* проверк", re.I)
+        _tot = _linked = 0
+        for _name, _items in (("sources", sources["sources"]), ("hypotheses", hyps["hypotheses"]),
+                              ("queue", tasks), ("people", people)):
+            for _o in _items:
+                _b = json.dumps(_o, ensure_ascii=False)
+                if _fix.search(_b):
+                    _tot += 1
+                    if re.search(r"err_\d+", _b):
+                        _linked += 1
+        add(f"- Объектов, чья проза признаётся в исправлении: **{_tot}**; "
+            f"из них связаны с классом ошибки: **{_linked}**")
+        add("  ⚠️ Это счётчик, а не долг к нулю: разбирать стоит те исправления, "
+            "что касаются подтверждённых рёбер, а не все подряд. И это намеренно "
+            "не ошибка валидатора — иначе дешевле станет не писать «отозвано».")
+        add("")
+
     add("## Долги и грязь")
     add("")
     add(f"- Непроведённых находок: **{len(unintegrated)}** — "
