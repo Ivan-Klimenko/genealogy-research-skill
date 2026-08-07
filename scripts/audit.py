@@ -407,6 +407,10 @@ if CS:
     for s in S.values():
         if s.get('type') != 'negative_result':
             continue
+        # ⭐ Объём, уже уточнённый по структуре дел, снимает признак: иначе он
+        # будет вечно показывать разобранное, и остаток перестанет быть виден.
+        if str(s.get('scope_limits') or '').strip():
+            continue
         txt = str(s.get('description') or '') + ' ' + str(s.get('data_extracted') or '')
         want = {n for n, rx in PART_WORD if re.search(rx, txt, re.I)}
         if not want:
