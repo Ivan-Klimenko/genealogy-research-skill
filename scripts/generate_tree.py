@@ -16,6 +16,7 @@ every link carries its own confidence — which the connector lines now show.
 """
 
 import datetime
+import hashlib
 import json
 import pathlib
 import re
@@ -82,10 +83,42 @@ _REF_RE = re.compile(r'д\.?\s?(\d{2,4})\b[^.]{0,25}?ск(?:ан|\.)?\s?(\d{1,4}
 _PATH_RE = re.compile(r'data/scans/[\w./-]+\.(?:jpg|jpeg|png)', re.I)
 
 
+def _dedupe_identical(web: pathlib.Path, have: dict) -> dict:
+    """Один и тот же снимок под двумя именами — показывать надо один раз.
+
+    🔴 Дедуп ПО СОДЕРЖИМОМУ, а не по имени и не по координате «дело+скан».
+    Имя не годится: `d612_sk287.jpg` и `d612_sk287_yakim_birth.jpg` — один
+    и тот же байт в байт файл, и на карточке Якима он выходил дважды подряд
+    с одинаковой подписью.
+    ⚠️ А координата не годится тем более: у д.1076 ск.29 два файла РАЗНЫЕ —
+    целая страница донесения и вырезанная из неё графа «жена». Вырезка
+    полезнее целого листа, и схлопывать их нельзя.
+    ⇒ Единственный честный признак тождества — совпадение байтов.
+    Из группы одинаковых остаётся имя с самым подробным суффиксом.
+    """
+    if not web.is_dir():
+        return have
+    by_hash = {}
+    for stem, name in have.items():
+        try:
+            digest = hashlib.sha1((web / name).read_bytes()).hexdigest()
+        except OSError:
+            continue
+        by_hash.setdefault(digest, []).append(stem)
+    drop = set()
+    for stems in by_hash.values():
+        if len(stems) < 2:
+            continue
+        keep = max(sorted(stems), key=len)
+        drop |= set(stems) - {keep}
+    return {k: v for k, v in have.items() if k not in drop}
+
+
 def collect_scans(sources_doc):
     """{src_id: [имя файла без каталога, ...]} — только для существующих картинок."""
     web = project_root / 'web' / 'scans' / 'view'
     have = {f.stem: f.name for f in web.iterdir()} if web.is_dir() else {}
+    have = _dedupe_identical(web, have)
     by_pair = {}
     for stem in have:
         m = _SCAN_RE.match(stem)
@@ -115,6 +148,84 @@ def collect_scans(sources_doc):
                 uniq.append(have[x])
         if uniq:
             out[s['id']] = uniq
+    return out
+
+
+# --------------------------------------------------------------------------
+# «Куда смотреть на листе» — ВЫЧИСЛЯЕТСЯ из шифра, а не пишется руками
+#
+# 🔴 Соблазн был завести поле и расписать 300 подписей вручную. Но всё, что
+# нужно человеку у метрической книги, В ШИФРЕ УЖЕ ЕСТЬ: часть определяет
+# формуляр, номер записи стоит в крайнем левом столбце, месяц сужает блок,
+# листы подтверждают разворот. Записанное второй раз рукой — это то самое
+# производное, которое ржавеет молча.
+# ⚠️ ГРАНИЦА ЖЁСТКАЯ: локатор строится ТОЛЬКО когда шифр называет ровно один
+# разворот и это тот самый. Иначе непонятно, к какому листу относятся «запись
+# № 141» и «сентябрь», а подпись, уверенно указывающая не туда, хуже пустой.
+# --------------------------------------------------------------------------
+
+_PART_RU = {'1': 'часть первая, о родившихся',
+            '2': 'часть вторая, о бракосочетавшихся',
+            '3': 'часть третья, о умерших'}
+# корень → как называть месяц в подписи. Причт пишет «Мартъ», «Генварь», «Іюль»,
+# и нормализовать это перебором окончаний нельзя — только таблицей.
+_MONTHS = [('январ', 'январь'), ('генвар', 'январь'), ('феврал', 'февраль'),
+           ('март', 'март'), ('апрел', 'апрель'), ('май', 'май'), ('мая', 'май'),
+           ('июн', 'июнь'), ('іюн', 'июнь'), ('июл', 'июль'), ('іюл', 'июль'),
+           ('август', 'август'), ('сентябр', 'сентябрь'), ('октябр', 'октябрь'),
+           ('ноябр', 'ноябрь'), ('декабр', 'декабрь')]
+
+
+def scan_locator(ref: str):
+    """Короткая строка «где на листе искать», собранная из archive_ref."""
+    ref = ' '.join(str(ref or '').split())
+    if not ref:
+        return None
+    bits = []
+
+    m = re.search(r'част[ьи]\s+(перв|втор|трет)|\bч\.\s*([123])\b', ref, re.I)
+    if m:
+        key = {'перв': '1', 'втор': '2', 'трет': '3'}.get((m.group(1) or '').lower(), m.group(2))
+        if key in _PART_RU:
+            bits.append(_PART_RU[key])
+
+    # номер записи: «запись м. № 189», «зап. ж. № 272», «брак № 4»,
+    # «запись № 21 женска пола», «женская запись № 19»
+    num = re.search(r'(мужск\w*|женск\w*)?\s*(?:запис[ьи]|зап\.|брак[аи]?)\s*'
+                    r'(м\.|ж\.|мужеска|женска)?\s*'
+                    r'№\s*(\d+(?:\s*,\s*\d+)*)\s*(мужеска|женска)?', ref, re.I)
+    if num:
+        sex = (num.group(1) or num.group(2) or num.group(4) or '').lower()
+        sex = ' мужеска пола' if sex.startswith('м') else (
+              ' женска пола' if sex.startswith('ж') else '')
+        nn = re.sub(r'\s*,\s*', ', ', num.group(3))
+        bits.append(f'запись № {nn}{sex} — крайний левый столбец')
+
+    mon = re.search(r'\b(%s)\w*' % '|'.join(r for r, _ in _MONTHS), ref, re.I)
+    if mon:
+        root = mon.group(1).lower()
+        bits.append('месяц ' + next(w for r, w in _MONTHS if r == root))
+
+    ll = re.search(r'(?:листы|лл\.|л\.)\s*([\d]+\s*(?:об\.)?(?:\s*[—\-/]\s*\d+\s*(?:об\.)?)?)', ref, re.I)
+    if ll:
+        bits.append('листы ' + ' '.join(ll.group(1).split()))
+
+    return ' · '.join(bits) if len(bits) >= 2 else None
+
+
+def build_scan_locators(sources_doc, scans):
+    """{src_id: локатор} — только там, где шифр называет РОВНО ОДИН разворот."""
+    out = {}
+    for s in sources_doc.get('sources') or []:
+        sid = s['id']
+        if sid not in scans:
+            continue
+        pairs = {(int(a), int(b)) for a, b in _REF_RE.findall(str(s.get('archive_ref') or ''))}
+        if len(pairs) != 1:
+            continue
+        loc = scan_locator(s.get('archive_ref'))
+        if loc:
+            out[sid] = loc
     return out
 
 
@@ -624,9 +735,35 @@ details.fold.why .fold-body { font-size: 12.5px; color: var(--muted); padding-bo
 #lb-bar {
   position: fixed; left: 0; right: 0; bottom: 0; padding: 10px 16px 14px;
   color: #e9edf3; font-size: 13px; text-align: center;
-  background: linear-gradient(transparent, rgba(0, 0, 0, .55));
+  background: linear-gradient(transparent, rgba(0, 0, 0, .72));
 }
 #lb-bar b { color: #fff; }
+/* «Куда смотреть» — единственное, что пишется руками и не выводится ниоткуда,
+   поэтому оно и стоит первым, крупнее прочего. */
+#lb-bar .lb-hint {
+  color: #fff; font-size: 14.5px; line-height: 1.35; margin: 5px auto 2px;
+  max-width: 70ch; text-wrap: balance;
+}
+/* Ручная подсказка отличается от вычисленной: её писал человек, и она про то,
+   чего в шифре нет, — перекрытую печатью строку, дописку другой рукой, вырезку. */
+#lb-bar .lb-hand { color: #ffe6a8; }
+#lb-bar .lb-what { margin-top: 3px; }
+#lb-bar .lb-ref { color: #b9c2cf; font-size: 12px; margin-top: 2px; }
+#lb-bar .lb-ref i { color: #f0c674; font-style: normal; }
+#lb-bar .lb-coord {
+  display: inline-block; margin: 0 0 0 6px; padding: 1px 8px; border-radius: 999px;
+  background: rgba(255, 255, 255, .16); color: #fff;
+  font-variant-numeric: tabular-nums; letter-spacing: .02em;
+}
+/* Пока лист грузится, старого на экране уже нет — вместо него мерцающая плашка,
+   чтобы экран не прыгал и было видно, что идёт загрузка. */
+#lightbox.loading img { visibility: hidden; }
+#lightbox.loading::before {
+  content: ''; position: fixed; left: 50%; top: 50%; width: 54vw; height: 70vh;
+  transform: translate(-50%, -50%); border-radius: 8px;
+  background: rgba(255, 255, 255, .07); animation: lb-pulse 1.1s ease-in-out infinite;
+}
+@keyframes lb-pulse { 0%, 100% { opacity: .45; } 50% { opacity: .9; } }
 #lb-close {
   position: fixed; top: 12px; right: 16px; z-index: 201;
   background: rgba(255, 255, 255, .12); color: #fff; border: 0;
@@ -1690,26 +1827,66 @@ function closePanel() {
 let lbZoom = false;
 let lbList = [];      /* [{file, src}] — снимки той галереи, из которой открыли */
 let lbIndex = 0;
+let lbToken = 0;      /* какой снимок сейчас ждём — листают быстрее, чем грузится */
 
 function showShot(i) {
   if (!lbList.length) return;
   lbIndex = Math.max(0, Math.min(i, lbList.length - 1));
   const cur = lbList[lbIndex];
   const s = srcById[cur.src] || {};
-  el('lb-img').src = 'scans/view/' + cur.file;
+  /* 🔴 СТАРУЮ КАРТИНКУ СНИМАЕМ ДО того, как назначим новую. Иначе браузер держит
+     прежнюю на экране, пока грузится следующая (снимки по 2—3 МБ), и подпись
+     под ней уже новая — то есть несколько секунд лист подписан чужим шифром.
+     ⚠️ Токен нужен потому, что листают быстрее, чем грузится: без него ответ
+     от предыдущего снимка снял бы «грузится» уже с текущего. */
+  const img = el('lb-img');
+  const token = ++lbToken;
+  img.removeAttribute('src');
+  el('lightbox').classList.add('loading');
+  const settled = () => { if (token === lbToken) el('lightbox').classList.remove('loading'); };
+  img.onload = img.onerror = settled;
+  img.src = 'scans/view/' + cur.file;
+  if (img.complete) settled();          /* из кэша — событие могло уже пройти */
   /* Смена снимка всегда возвращает вид «целиком»: иначе следующий лист открывался бы
      прокрученным в ту точку, которая была осмысленна на предыдущем. */
   el('lightbox').classList.remove('zoomed');
   el('lightbox').scrollTop = el('lightbox').scrollLeft = 0;
   lbZoom = false;
+  /* ================= из чего собрана подпись =================
+     ⚠️ Описание берётся из ИСТОЧНИКА, а не из снимка: один разворот принадлежит
+     нескольким источникам сразу (правило 15 — на скане до пяти записей), и через
+     какой из них человек до него дошёл, решает data-src кнопки.
+     🔴 ПОЭТОМУ ШИФР ИСТОЧНИКА МОЖЕТ БЫТЬ НЕ ПРО ЭТОТ ЛИСТ, и раньше он всё равно
+     печатался под картинкой как её подпись. Так выходит, когда снимок привязался
+     правилом 2 (путь в дословной копии): у src_702 и src_703 копии называют оба
+     разворота, и каждому источнику достаются оба, а шифр у каждого свой.
+     Теперь координата снимка берётся из ИМЕНИ ФАЙЛА — она про сам лист и спорить
+     с ним не может, — а шифр печатается с пометкой, когда он про источник целиком. */
   const many = lbList.length > 1;
+  const own = /^d(\d{1,4})_sk(\d{1,4})/i.exec(cur.file);
+  /* ⚠️ Сверять номера НАДО ЧИСЛАМИ, а не строками: в имени файла скан дополнен
+     нулями до трёх знаков (`d237_sk083`), а в шифре он пишется как есть («ск.83»).
+     Строковое сравнение объявляло чужими 43 пары из 92 — и подпись честного листа
+     получала пометку «шифр не этого листа». Поймано на д.237 ск.83. */
+  const key = (a, b) => Number(a) + '/' + Number(b);
+  const refPairs = [...String(s.archive_ref || '')
+    .matchAll(/д\.?\s?(\d{2,4})\b[^.]{0,25}?ск(?:ан|\.)?\s?(\d{1,4})\b/g)]
+    .map(m => key(m[1], m[2]));
+  const covers = own && refPairs.includes(key(own[1], own[2]));
+  /* Локатор ВЫЧИСЛЕН из шифра при сборке и есть только там, где шифр называет
+     ровно один разворот; ручная подсказка — то, что из шифра не выводится. */
+  const loc = refPairs.length === 1 && covers ? SCAN_LOC[cur.src] : null;
+  const hint = (SCAN_HINTS[cur.src] || {})[cur.file.replace(/\.[a-z]+$/i, '')];
   el('lb-bar').innerHTML =
-    (many ? `<span class="lb-count">${lbIndex + 1} / ${lbList.length}</span> ` : '') +
-    `<b>${esc(cur.src)}</b> · ${esc(s.description || '')}` +
-    (s.archive_ref ? `<br>${esc(s.archive_ref)}` : '');
-  /* ⚠️ Подпись берётся из ИСТОЧНИКА, а не из снимка: один и тот же разворот
-     принадлежит нескольким источникам сразу (правило 15 — на скане до пяти записей),
-     и через какой из них человек до него дошёл, решает data-src кнопки. */
+    (many ? `<span class="lb-count">${lbIndex + 1} / ${lbList.length}</span>` : '') +
+    (own ? `<span class="lb-coord">д.${Number(own[1])} ск.${Number(own[2])}</span>` : '') +
+    (loc ? `<div class="lb-hint">${esc(loc)}</div>` : '') +
+    (hint ? `<div class="lb-hint lb-hand">${esc(hint)}</div>` : '') +
+    `<div class="lb-what"><b>${esc(cur.src)}</b> · ${esc(s.description || '')}</div>` +
+    (s.archive_ref
+      ? `<div class="lb-ref">${covers || !refPairs.length ? '' :
+          '<i>шифр источника целиком, не этого листа:</i> '}${esc(s.archive_ref)}</div>`
+      : '');
   el('lb-prev').hidden = el('lb-next').hidden = !many;
   el('lb-prev').disabled = lbIndex === 0;
   el('lb-next').disabled = lbIndex === lbList.length - 1;
@@ -1726,9 +1903,10 @@ function openShot(btn) {
 function stepShot(d) { showShot(lbIndex + d); }
 
 function closeShot() {
-  el('lightbox').classList.remove('on', 'zoomed');
+  el('lightbox').classList.remove('on', 'zoomed', 'loading');
   lbZoom = false;
   lbList = [];
+  lbToken++;
   el('lb-img').removeAttribute('src');
 }
 
@@ -2064,6 +2242,8 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 const GRAPH_DATA = __GRAPH_JSON__;
 const SOURCES = __SOURCES_JSON__;
 const SCANS_BY_SRC = __SCANS_JSON__;   // {src_id: [файл, …]} — вычислено при сборке
+const SCAN_LOC   = __SCAN_LOC_JSON__;   // {src_id: локатор} — ВЫЧИСЛЕН из шифра при сборке
+const SCAN_HINTS = __SCAN_HINTS_JSON__; // {src_id: {стем файла: подсказка}} — пишется руками, только невыводимое
 const HYPOTHESES = __HYPOTHESES_JSON__;
 __JS__
 </script>
@@ -2092,6 +2272,8 @@ subtitle = ('{} человек ({} требуют исследования, {} �
     gen_levels,
 )
 
+_scans = collect_scans(sources)
+
 replacements = {
     '__TITLE__': title,
     '__SUBTITLE__': subtitle,
@@ -2108,7 +2290,12 @@ replacements = {
     '__CSS__': CSS,
     '__GRAPH_JSON__': js_json(graph),
     '__SOURCES_JSON__': js_json(sources),
-    '__SCANS_JSON__': js_json(collect_scans(sources)),
+    '__SCANS_JSON__': js_json(_scans),
+    '__SCAN_LOC_JSON__': js_json(build_scan_locators(sources, _scans)),
+    '__SCAN_HINTS_JSON__': js_json({
+        s['id']: s['scan_hints'] for s in (sources.get('sources') or [])
+        if s.get('scan_hints')
+    }),
     '__HYPOTHESES_JSON__': js_json(hypotheses),
     '__JS__': JS,
 }

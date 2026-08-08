@@ -778,6 +778,10 @@ for rule in (rmap.get("discovery_rules") or []):
 # ИСТОЧНИКИ, ГИПОТЕЗЫ, ОЧЕРЕДЬ (как в v1)
 # ===========================================================================
 
+# Имена всех имеющихся снимков без расширения — на них ссылается scan_hints.
+SCAN_STEMS = {f.stem for f in (DATA / "scans").rglob("*")
+              if f.suffix.lower() in (".jpg", ".jpeg", ".png")}
+
 for s in sources["sources"]:
     if sources.get("meta", {}).get("types") and s.get("type") not in sources["meta"]["types"]:
         errors.append(f"source {s['id']}: неизвестный type={s.get('type')!r}")
@@ -823,6 +827,24 @@ for s in sources["sources"]:
             warnings.append(f"source {s['id']}: raw_record лежит в каталоге {f.parts[-2]}, "
                             f"которого нет среди id людей (для находок не о человеке "
                             f"есть оговорённый каталог raw_records/_project/)")
+    # --- scan_hints: «куда смотреть на листе», писанное руками ---------------
+    # 🔴 Ключ — имя файла снимка без расширения, и он обязан существовать. Поле
+    # пишется рукой и потому ржавеет молча: подсказка, ключ которой указывает
+    # в никуда, просто не покажется, и заметить это на странице нечем. Проверено
+    # в тот же день, когда поле заведено: из семнадцати подсказок одна промахнулась
+    # мимо файла на одну цифру в дате внутри имени.
+    hints = s.get("scan_hints")
+    if hints is not None:
+        if not isinstance(hints, dict):
+            errors.append(f"source {s['id']}: scan_hints должен быть словарём "
+                          f"«имя файла без расширения → подсказка»")
+        else:
+            for key, text in hints.items():
+                if key not in SCAN_STEMS:
+                    errors.append(f"source {s['id']}: scan_hints -> снимка {key!r} нет "
+                                  f"среди файлов data/scans/")
+                if not str(text or "").strip():
+                    errors.append(f"source {s['id']}: scan_hints[{key}] пуст")
 
 # --- сканы: связь с источником ВЫЧИСЛЯЕТСЯ, а не хранится -------------------
 # Имя файла обязано быть `d<дело>_sk<скан>[_что_на_нём].jpg`, и этого достаточно:
