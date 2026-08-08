@@ -77,8 +77,17 @@ def full(sid):
                      str(s.get('archive_ref') or ''), raw(sid)])
 
 
+# 🔴 ДОРЕФОРМЕННАЯ ОРФОГРАФИЯ ЛОМАЛА СРАВНЕНИЕ ИМЁН, И ЭТО БЫЛ ФОН ПРИЗНАКА 1a.
+# `norm` режет слово по ДЛИНЕ, а «Ерошинъ» на букву длиннее, чем «Ерошин»:
+# из карточки выходил корень «егоши», из дословной копии — «ерошин», и они
+# не совпадали никогда. Отсюда 44 срабатывания «имён нет в копии» там, где
+# оба имени в копии есть. Найдено прочёсом 2026-08-08.
+# ⇒ Сперва приводим написание к современному, потом режем.
+_OLD = str.maketrans({'ѣ': 'е', 'і': 'и', 'ѵ': 'и', 'ѳ': 'ф', 'ъ': '', 'ь': '', 'ё': 'е'})
+
+
 def norm(w):
-    w = w.replace('ё', 'е').lower()
+    w = w.lower().translate(_OLD)
     return w[:-2] if len(w) > 7 else w[:-1] if len(w) > 5 else w
 
 
@@ -86,12 +95,12 @@ def keys(pid):
     p = P[pid]
     ws = set()
     for f in ('name_ru', 'name_full', 'patronymic', 'maiden_name'):
-        ws |= set(re.findall(r'[А-ЯЁа-яё]{4,}', str(p.get(f) or '')))
+        ws |= set(re.findall(r'[А-ЯЁа-яёѢѣІіѲѳѴѵЪъЬь]{4,}', str(p.get(f) or '')))
     return {norm(w) for w in ws}
 
 
 def named_in(pid, txt):
-    t = {norm(w) for w in re.findall(r'[А-ЯЁа-яё]{4,}', txt)}
+    t = {norm(w) for w in re.findall(r'[А-ЯЁа-яёѢѣІіѲѳѴѵЪъЬь]{4,}', txt)}
     k = keys(pid)
     return len(k & t) >= 2 or (len(k) == 1 and k <= t)
 
