@@ -708,7 +708,17 @@ details.fold.why .fold-body { font-size: 12.5px; color: var(--muted); padding-bo
   flex: 0 0 auto; padding: 10px 16px 14px; color: #e9edf3; font-size: 13px;
   background: rgba(8, 10, 13, .92); border-top: 1px solid rgba(255, 255, 255, .09);
 }
-#lb-bar > * { max-width: min(100%, var(--capw, 1100px)); margin-left: auto; margin-right: auto; }
+/* 🔴 ВИЛКА, А НЕ ПРОСТО «ПО ШИРИНЕ ЛИСТА». Равнять подпись на снимок хорошо,
+   пока снимок — разворот метрической книги; но в собрании есть и портретные
+   листы 3:4 (записи родни, характеристики — девять штук), и вырезки строк
+   из донесений вплоть до 7:1. У первых подпись сжалась бы в колонку, у вторых
+   растянулась бы во весь экран строкой в 270 знаков.
+   ⇒ Ширина следует за листом ВНУТРИ читаемых границ: не уже 420 px и не шире
+   1100 px. На узком экране всё это ещё раз ограничено шириной самого экрана. */
+#lb-bar > * {
+  max-width: min(100%, clamp(420px, var(--capw, 1000px), 1100px));
+  margin-left: auto; margin-right: auto;
+}
 #lb-bar .lb-line1 { display: flex; gap: 8px; align-items: center; margin-bottom: 5px; }
 #lb-bar .lb-coord, #lb-bar .lb-count {
   display: inline-block; padding: 1px 9px; border-radius: 999px;
