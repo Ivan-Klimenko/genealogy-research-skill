@@ -676,9 +676,12 @@ details.fold.why .fold-body { font-size: 12.5px; color: var(--muted); padding-bo
   background: rgba(16, 18, 22, .93);
 }
 #lightbox.on { display: flex; flex-direction: column; }
+/* ⚠️ Отступов по бокам НЕТ, и это осознанно: стрелки рисуются ПОВЕРХ листа,
+   а не рядом с ним. Отступ под них съедал 120 px ширины, а на телефоне
+   в портретной ориентации лист и так упирается в ширину экрана. */
 #lb-stage {
-  flex: 1 1 auto; min-height: 0; overflow: hidden;
-  display: flex; align-items: center; justify-content: center; padding: 14px 60px 6px;
+  position: relative; flex: 1 1 auto; min-height: 0; overflow: hidden;
+  display: flex; align-items: center; justify-content: center; padding: 8px 0 4px;
 }
 #lightbox img {
   max-width: 100%; max-height: 100%; object-fit: contain;
@@ -694,13 +697,18 @@ details.fold.why .fold-body { font-size: 12.5px; color: var(--muted); padding-bo
 }
 #lightbox.zoomed img.dragging { cursor: grabbing; }
 
-/* Подпись: три уровня, одинаковой ширины и по левому краю. Центровка и разная
-   ширина строк — то, из-за чего прежняя подпись читалась как обрывки. */
+/* «Только лист»: прячет подпись и стрелки. Нужно, когда лист разглядывают,
+   а не читают про него. */
+#lightbox.bare #lb-bar, #lightbox.bare .lb-nav { display: none; }
+
+/* Подпись. 🔴 Ширина равняется на КАРТИНКУ, а не на удобную для чтения меру:
+   владелец справедливо заметил, что текст вдвое уже листа и потому кажется,
+   будто его надо экономить. --capw ставит JS по фактической ширине снимка. */
 #lb-bar {
   flex: 0 0 auto; padding: 10px 16px 14px; color: #e9edf3; font-size: 13px;
   background: rgba(8, 10, 13, .92); border-top: 1px solid rgba(255, 255, 255, .09);
 }
-#lb-bar > * { max-width: 78ch; margin-left: auto; margin-right: auto; }
+#lb-bar > * { max-width: min(100%, var(--capw, 1100px)); margin-left: auto; margin-right: auto; }
 #lb-bar .lb-line1 { display: flex; gap: 8px; align-items: center; margin-bottom: 5px; }
 #lb-bar .lb-coord, #lb-bar .lb-count {
   display: inline-block; padding: 1px 9px; border-radius: 999px;
@@ -708,11 +716,13 @@ details.fold.why .fold-body { font-size: 12.5px; color: var(--muted); padding-bo
   font-variant-numeric: tabular-nums; letter-spacing: .02em;
 }
 #lb-bar .lb-count { background: none; color: #96a1b0; padding-left: 0; }
-/* Сама подпись — единственное, ради чего эта полоса существует. */
-#lb-bar .lb-text {
-  color: #fff; font-size: 14.5px; line-height: 1.4; white-space: pre-line;
-  max-height: 27vh; overflow-y: auto;
-}
+/* Сама подпись — единственное, ради чего эта полоса существует.
+   ⚠️ Переносы строк из YAML НЕ сохраняются: текст переливается по ширине
+   контейнера. Хранить в подписи авторскую вёрстку — значит верстать за экран,
+   которого не видел: на телефоне мои переносы рвали фразу посередине. */
+#lb-bar .lb-text { color: #fff; font-size: 14.5px; line-height: 1.42; max-height: 30vh; overflow-y: auto; }
+#lb-bar .lb-text p { margin: 0 0 4px; }
+#lb-bar .lb-text p:last-child { margin-bottom: 0; }
 #lb-bar .lb-draft { color: #ffe0a3; }
 #lb-bar .lb-none { color: #8d97a5; font-style: italic; font-size: 13px; }
 #lb-bar .lb-line3 {
@@ -725,18 +735,31 @@ details.fold.why .fold-body { font-size: 12.5px; color: var(--muted); padding-bo
 }
 #lb-bar .lb-srcbtn:hover { background: rgba(255, 255, 255, .2); color: #fff; }
 
-/* Пока лист грузится, старого на экране уже нет — вместо него мерцающая плашка,
-   чтобы экран не прыгал и было видно, что идёт загрузка. */
+/* Пока лист грузится, старого на экране уже нет — вместо него мерцающая плашка. */
 #lightbox.loading img { visibility: hidden; }
 #lightbox.loading #lb-stage::before {
   content: ''; width: 54vw; height: 100%; border-radius: 8px;
   background: rgba(255, 255, 255, .07); animation: lb-pulse 1.1s ease-in-out infinite;
 }
 @keyframes lb-pulse { 0%, 100% { opacity: .45; } 50% { opacity: .9; } }
-#lb-close {
-  position: fixed; top: 12px; right: 16px; z-index: 201;
+#lb-close, #lb-bare {
+  position: fixed; top: 12px; z-index: 201;
   background: rgba(255, 255, 255, .12); color: #fff; border: 0;
-  border-radius: 999px; width: 38px; height: 38px; font-size: 20px; cursor: pointer;
+  border-radius: 999px; width: 38px; height: 38px; font-size: 18px; cursor: pointer;
+}
+#lb-close { right: 16px; font-size: 20px; }
+#lb-bare { right: 62px; }
+#lb-bare:hover { background: rgba(255, 255, 255, .22); }
+/* На телефоне лист лежит поперёк экрана и по высоте занимает треть, а подпись
+   в узкую колонку разворачивается вдвое длиннее. Поджимаем её — и оставляем
+   кнопку «только лист» и увеличение по нажатию как настоящий выход. */
+@media (max-width: 620px) {
+  #lb-bar { padding: 8px 12px 11px; }
+  #lb-bar .lb-text { font-size: 13.5px; line-height: 1.38; max-height: 34vh; }
+  #lb-bar .lb-line3 { flex-wrap: wrap; gap: 6px; }
+  #lb-close, #lb-bare { width: 34px; height: 34px; top: 8px; }
+  #lb-close { right: 10px; }
+  #lb-bare { right: 50px; }
 }
 #lb-close:hover { background: rgba(255, 255, 255, .22); }
 /* Подсветка источника, к которому увела сноска из просмотрщика: без неё
@@ -750,6 +773,7 @@ details.fold.why .fold-body { font-size: 12.5px; color: var(--muted); padding-bo
    прокручивается, и absolute уехал бы вместе с листом за край экрана. */
 .lb-nav {
   position: fixed; top: 50%; transform: translateY(-50%); z-index: 201;
+  backdrop-filter: blur(2px);
   background: rgba(255, 255, 255, .12); color: #fff; border: 0;
   border-radius: 999px; width: 46px; height: 66px; font-size: 30px; line-height: 1;
   cursor: pointer; transition: background .15s;
@@ -1815,7 +1839,14 @@ function showShot(i) {
   const token = ++lbToken;
   img.removeAttribute('src');
   el('lightbox').classList.add('loading');
-  const settled = () => { if (token === lbToken) el('lightbox').classList.remove('loading'); };
+  const settled = () => {
+    if (token !== lbToken) return;
+    el('lightbox').classList.remove('loading');
+    /* Подпись равняется по ширине на сам лист — иначе текст вдвое уже картинки
+       и кажется, что его надо экономить. */
+    const w = img.getBoundingClientRect().width;
+    if (w > 200) el('lb-bar').style.setProperty('--capw', Math.round(w) + 'px');
+  };
   img.onload = img.onerror = settled;
   img.src = 'scans/view/' + cur.file;
   if (img.complete) settled();          /* из кэша — событие могло уже пройти */
@@ -1843,7 +1874,12 @@ function showShot(i) {
       (many ? `<span class="lb-count">${lbIndex + 1} / ${lbList.length}</span>` : '') +
     `</div>` +
     (cap.text
-      ? `<div class="lb-text${cap.eyes ? '' : ' lb-draft'}">${esc(cap.text)}</div>`
+      ? `<div class="lb-text${cap.eyes ? '' : ' lb-draft'}">${
+          /* Одиночный перенос — это вёрстка YAML, а не воля автора: склеиваем.
+             Пустая строка разделяет абзацы — её сохраняем. */
+          cap.text.split(/\n\s*\n/).map(par =>
+            `<p>${esc(par.replace(/\s*\n\s*/g, ' ').trim())}</p>`).join('')
+        }</div>`
       : `<div class="lb-text lb-none">Подписи к этому снимку ещё нет.</div>`) +
     `<div class="lb-line3">` +
       (cap.case ? `<span class="lb-case">${esc(cap.case)}</span>` : '') +
@@ -1866,7 +1902,7 @@ function openShot(btn) {
 function stepShot(d) { showShot(lbIndex + d); }
 
 function closeShot() {
-  el('lightbox').classList.remove('on', 'zoomed', 'loading');
+  el('lightbox').classList.remove('on', 'zoomed', 'loading', 'bare');
   lbZoom = false;
   lbList = [];
   lbToken++;
@@ -1888,6 +1924,10 @@ el('lb-bar').addEventListener('click', e => {
   const box = document.getElementById('src-' + b.dataset.gosrc);
   if (box) { box.scrollIntoView({block: 'center'}); box.classList.add('src-flash'); 
              setTimeout(() => box.classList.remove('src-flash'), 1600); }
+});
+el('lb-bare').addEventListener('click', e => {
+  e.stopPropagation();
+  el('lightbox').classList.toggle('bare');
 });
 el('lb-prev').addEventListener('click', e => { e.stopPropagation(); stepShot(-1); });
 el('lb-next').addEventListener('click', e => { e.stopPropagation(); stepShot(1); });
@@ -2196,6 +2236,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 <!-- просмотр снимка документа во весь экран -->
 <div id="lightbox" role="dialog" aria-label="Снимок документа">
   <button id="lb-close" type="button" aria-label="Закрыть">✕</button>
+  <button id="lb-bare" type="button" aria-label="Только лист, без подписи">⤢</button>
   <button id="lb-prev" class="lb-nav" type="button" aria-label="Предыдущий снимок" hidden>‹</button>
   <div id="lb-stage"><img id="lb-img" alt=""></div>
   <button id="lb-next" class="lb-nav" type="button" aria-label="Следующий снимок" hidden>›</button>
