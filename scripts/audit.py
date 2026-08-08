@@ -541,6 +541,108 @@ for h in H.values():
                 f"{h['id']} [{h.get('status')}]: {str(line)[:110].strip()}…")
             break
 
+# ── 21. отрицание, полученное одним написанием селения из многих ─────────────
+# 🔬 РАЗБОР err_004, купленный дорого 2026-08-07: отрицание «в 1844—1845 гг.
+# починка Большепольского в деле нет» закрыло тот единственный год, где лежала
+# запись о рождении прапрапрадеда. Искали два написания из восьми; причт писал
+# «починка БОЛЬШАГО ПОЛЯ».
+#
+# ⚠️ ПРИЗНАК СМОТРИТ НЕ НА ВЫВОД, А НА ШАБЛОН ПОИСКА. Отрицание надёжно ровно
+# настолько, насколько широк был запрос, и это единственное его свойство,
+# которое можно проверить машинно.
+STOP = {'починок', 'починка', 'деревня', 'деревни', 'село', 'села', 'поч', 'дер', 'с'}
+
+
+def _roots(name):
+    """Корни значимых слов названия.
+
+    ⚠️ Корень в пять букв склеивает «БОЛЬШЕпольский» с «БОЛЬШАя Кумань»,
+    и признак начинает считать чужое имя своим — 46 срабатываний, почти все
+    ложные (первый прогон 2026-08-08). Семь букв разводит их: «большепо»
+    против «большая».
+    """
+    out = set()
+    for w in re.findall(r'[А-ЯЁа-яё]{3,}', str(name).replace('ё', 'е')):
+        w = w.lower()
+        if w in STOP:
+            continue
+        out.add(w[:7])
+    return out
+
+
+# ⭐⭐ КЛАСТЕРЫ ИМЁН ОДНОГО СЕЛЕНИЯ — из resource_map.village_aliases.
+# 🔴 НЕ `family_resources.villages`: там перечислены МЕСТА ЛИНИИ (Кислицыно
+# и Осинов — разные деревни), и первый прогон признака ругался на них как
+# на «пропущенные написания» — 34 срабатывания, почти все ложные.
+# Кластер же — это имена ОДНОГО места, и только их пропуск сужает охват.
+try:
+    _rm = yaml.safe_load((D / 'resource_map.yaml').read_text(encoding='utf-8')) or {}
+except Exception:
+    _rm = {}
+VILLAGES = {}          # кластер → [(имя, нижний регистр), …]
+for _cid, _c in (_rm.get('village_aliases') or {}).items():
+    ns = [(n, str(n).replace('ё', 'е').lower()) for n in (_c.get('names') or [])]
+    if len(ns) >= 3:
+        VILLAGES[_cid] = ns
+
+MARKUP = D / '.yandex_markup'
+_vindex = {}
+
+
+def _variants_in_case(code, names):
+    """{имя: встречается ли} по сводному файлу дела. Один проход, кэш в памяти."""
+    key = (str(code), id(names))
+    if key in _vindex:
+        return _vindex[key]
+    f = MARKUP / ('d%s_all.txt' % str(code))
+    got = set()
+    if f.exists():
+        try:
+            txt = f.read_text(encoding='utf-8', errors='replace').replace('ё', 'е').lower()
+        except OSError:
+            txt = ''
+        got = {n for n, low in names if low in txt}
+    _vindex[key] = got
+    return got
+
+
+if VILLAGES:
+    for s in S.values():
+        if s.get('type') != 'negative_result':
+            continue
+        if re.search(r'написани', str(s.get('scope_limits') or ''), re.I):
+            continue
+        # 🔴 ШАБЛОН ОГРАНИЧИВАЕТ ОХВАТ ТОЛЬКО ТАМ, ГДЕ ОН И БЫЛ ОХВАТОМ.
+        # Сплошной прочёс читает дело целиком, и написание селения ему безразлично:
+        # в первом прогоне признак обвинил src_2603 («прочтены все 1060 разворотов»)
+        # и src_205 (разбор ОДНОЙ записи) — оба ни при чём. Ругаемся только
+        # на отрицания, добытые поиском (правило 14 проводит ровно эту границу).
+        # ⚠️ И `sweep` сюда не входит: в этом проекте им помечают тот же сплошной
+        # прочёс («все 472 разворота дела»), и признак обвинял src_1011 и src_706
+        # ни за что. Остаются только те методы, где охват РАВЕН запросу.
+        if s.get('method') not in ('search', 'prefix_scan'):
+            continue
+        if re.search(r'сплошн|целиком|все \d+ разворот', str(s.get('scope') or ''), re.I):
+            continue
+        cases = case_numbers(str(s.get('archive_ref') or ''))
+        if not cases or len(cases) > WIDE_SRC:
+            continue
+        blob = ' '.join(str(s.get(f) or '') for f in
+                        ('scope', 'archive_ref', 'description', 'data_extracted'))
+        blob_l = blob.replace('ё', 'е').lower()
+        for fam, vs in VILLAGES.items():
+            named = {v for v, low in vs if low in blob_l}
+            if not named:
+                continue
+            present = set()
+            for n in sorted(cases):
+                present |= _variants_in_case(n, vs)
+            missed = sorted(present - named)
+            if missed:
+                findings['21. отрицание названо не всеми написаниями, что есть в делах (правило 11)'].append(
+                    f"{s['id']} [{s.get('method')}]: по кластеру «{fam}» названо {sorted(named)}, "
+                    f"а в делах {sorted(cases)[:4]} то же селение встречается ещё как {missed[:5]}")
+
 # --- 14. люди без единого сильного основания существования -------------------
 STRONG = {'named_directly', 'direct_knowledge', 'family_memory', 'patronymic'}
 for p in G['people']:
