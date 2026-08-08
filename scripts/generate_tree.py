@@ -15,6 +15,7 @@ Kinship comes from the ``relationships`` list rather than from ``father_id`` /
 every link carries its own confidence — which the connector lines now show.
 """
 
+import datetime
 import json
 import pathlib
 import re
@@ -1966,6 +1967,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 <footer class="page">
   <div class="wrap">
     Исследователь: __RESEARCHER__ · данные обновлены __UPDATED__ ·
+    страница собрана __BUILT__ ·
     сгенерировано из data/family_graph.yaml (граф, схема v2), data/sources.yaml,
     data/hypotheses.yaml
   </div>
@@ -2027,6 +2029,12 @@ replacements = {
     '__SUBTITLE__': subtitle,
     '__RESEARCHER__': meta.get('researcher', ''),
     '__UPDATED__': meta.get('last_updated', ''),
+    # 🔴 Время сборки печатается в подвале НЕ для красоты. 2026-08-08 владелец
+    # проекта смотрел с телефона кэшированную копию и сообщил, что документы
+    # исчезли, — на сервере они были. Разбор занял полчаса и упёрся в вопрос
+    # «а какая версия у тебя открыта?», на который страница ответить не могла.
+    # Теперь может: дата и время внизу — это отпечаток ИМЕННО ЭТОЙ копии.
+    '__BUILT__': datetime.datetime.now().strftime('%d.%m.%Y %H:%M'),
     '__HYP_COUNT__': str(len(hypotheses.get('hypotheses', []))),
     '__METHOD_RULE__': hypotheses.get('meta', {}).get('methodical_rule', ''),
     '__CSS__': CSS,
