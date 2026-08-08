@@ -633,6 +633,28 @@ details.fold.why .fold-body { font-size: 12.5px; color: var(--muted); padding-bo
   border-radius: 999px; width: 38px; height: 38px; font-size: 20px; cursor: pointer;
 }
 #lb-close:hover { background: rgba(255, 255, 255, .22); }
+#lb-bar .lb-count {
+  display: inline-block; margin-right: 8px; padding: 1px 8px; border-radius: 999px;
+  background: rgba(255, 255, 255, .16); color: #fff; font-variant-numeric: tabular-nums;
+}
+/* Стрелки листания. 🔴 position: fixed, а не absolute: в увеличенном виде контейнер
+   прокручивается, и absolute уехал бы вместе с листом за край экрана. */
+.lb-nav {
+  position: fixed; top: 50%; transform: translateY(-50%); z-index: 201;
+  background: rgba(255, 255, 255, .12); color: #fff; border: 0;
+  border-radius: 999px; width: 46px; height: 66px; font-size: 30px; line-height: 1;
+  cursor: pointer; transition: background .15s;
+}
+.lb-nav:hover:not(:disabled) { background: rgba(255, 255, 255, .24); }
+.lb-nav:disabled { opacity: .25; cursor: default; }
+.lb-nav[hidden] { display: none; }
+#lb-prev { left: 10px; }
+#lb-next { right: 10px; }
+@media (max-width: 720px) {
+  .lb-nav { width: 38px; height: 54px; font-size: 24px; }
+  #lb-prev { left: 4px; }
+  #lb-next { right: 4px; }
+}
 
 .hyp-mini { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; margin-bottom: 9px; font-size: 13.5px; }
 .hyp-mini .claim { font-weight: 600; margin-top: 5px; }
@@ -1522,7 +1544,10 @@ function shotsHTML(pid) {
               title="${esc(s.src)} — открыть крупно">
         <img loading="lazy" src="scans/thumb/${esc(s.file)}" alt="${esc(s.src)}">
       </button>`).join('')}</div>
-    <div class="shot-cap">Нажмите на снимок, чтобы открыть его во весь экран; там же — увеличение по клику.</div>`;
+    <div class="shot-cap">Нажмите на снимок, чтобы открыть его во весь экран; там же — увеличение
+      по клику.${shots.length > 1
+        ? ' Листать снимки этого человека — стрелками ← → или кнопками по краям.'
+        : ''}</div>`;
 }
 
 function sourceHTML(s, ev) {
@@ -1655,32 +1680,67 @@ function closePanel() {
 /* ================= просмотр снимка во весь экран =================
    Веб-версия скана — 2200 px: на ней рукопись читается, но лист метрической книги
    это разворот в две страницы, и мелочь всё равно приходится приближать. Поэтому
-   по клику картинка переключается в натуральную величину и её можно таскать. */
-let lbZoom = false;
+   по клику картинка переключается в натуральную величину и её можно таскать.
 
-function openShot(file, srcId) {
-  const s = srcById[srcId] || {};
-  el('lb-img').src = 'scans/view/' + file;
+   🔴 ЛЕНТА ДЛЯ ЛИСТАНИЯ БЕРЁТСЯ ИЗ DOM, А НЕ ПЕРЕСЧИТЫВАЕТСЯ ЗАНОВО. Соблазн был
+   собрать её вызовом shotsOf(pid) — но тогда порядок и состав ленты пришлось бы
+   держать совпадающими с тем, что нарисовано, а это ровно тот случай, когда
+   производное хранят дважды и оно расходится. Кнопки уже лежат в одном
+   контейнере .shots в нужном порядке; лента — это они и есть. */
+let lbZoom = false;
+let lbList = [];      /* [{file, src}] — снимки той галереи, из которой открыли */
+let lbIndex = 0;
+
+function showShot(i) {
+  if (!lbList.length) return;
+  lbIndex = Math.max(0, Math.min(i, lbList.length - 1));
+  const cur = lbList[lbIndex];
+  const s = srcById[cur.src] || {};
+  el('lb-img').src = 'scans/view/' + cur.file;
+  /* Смена снимка всегда возвращает вид «целиком»: иначе следующий лист открывался бы
+     прокрученным в ту точку, которая была осмысленна на предыдущем. */
   el('lightbox').classList.remove('zoomed');
+  el('lightbox').scrollTop = el('lightbox').scrollLeft = 0;
   lbZoom = false;
-  el('lb-bar').innerHTML = `<b>${esc(srcId)}</b> · ${esc(s.description || '')}` +
+  const many = lbList.length > 1;
+  el('lb-bar').innerHTML =
+    (many ? `<span class="lb-count">${lbIndex + 1} / ${lbList.length}</span> ` : '') +
+    `<b>${esc(cur.src)}</b> · ${esc(s.description || '')}` +
     (s.archive_ref ? `<br>${esc(s.archive_ref)}` : '');
-  el('lightbox').classList.add('on');
+  /* ⚠️ Подпись берётся из ИСТОЧНИКА, а не из снимка: один и тот же разворот
+     принадлежит нескольким источникам сразу (правило 15 — на скане до пяти записей),
+     и через какой из них человек до него дошёл, решает data-src кнопки. */
+  el('lb-prev').hidden = el('lb-next').hidden = !many;
+  el('lb-prev').disabled = lbIndex === 0;
+  el('lb-next').disabled = lbIndex === lbList.length - 1;
 }
+
+function openShot(btn) {
+  const gallery = btn.closest('.shots');
+  const btns = gallery ? [...gallery.querySelectorAll('[data-shot]')] : [btn];
+  lbList = btns.map(b => ({ file: b.dataset.shot, src: b.dataset.src }));
+  el('lightbox').classList.add('on');
+  showShot(btns.indexOf(btn));
+}
+
+function stepShot(d) { showShot(lbIndex + d); }
 
 function closeShot() {
   el('lightbox').classList.remove('on', 'zoomed');
   lbZoom = false;
+  lbList = [];
   el('lb-img').removeAttribute('src');
 }
 
 /* delegated clicks: person chips anywhere on the page open that person */
 document.addEventListener('click', e => {
   const shot = e.target.closest('[data-shot]');
-  if (shot) { openShot(shot.dataset.shot, shot.dataset.src); return; }
+  if (shot) { openShot(shot); return; }
   const chip = e.target.closest('[data-person]');
   if (chip) togglePerson(chip.dataset.person);
 });
+el('lb-prev').addEventListener('click', e => { e.stopPropagation(); stepShot(-1); });
+el('lb-next').addEventListener('click', e => { e.stopPropagation(); stepShot(1); });
 el('lb-close').addEventListener('click', closeShot);
 el('lightbox').addEventListener('click', e => { if (e.target.id === 'lightbox') closeShot(); });
 /* Увеличение и перетаскивание. Клик переключает натуральную величину; в этом виде
@@ -1720,8 +1780,14 @@ addEventListener('mouseup', () => {
   el('lb-img').classList.remove('dragging');
 });
 document.addEventListener('keydown', e => {
-  if (e.key !== 'Escape') return;
-  if (el('lightbox').classList.contains('on')) closeShot(); else closePanel();
+  const lbOn = el('lightbox').classList.contains('on');
+  if (e.key === 'Escape') { if (lbOn) closeShot(); else closePanel(); return; }
+  if (!lbOn || lbList.length < 2) return;
+  /* ⚠️ Стрелки ЛИСТАЮТ, а не возят увеличенный лист, и это осознанный размен.
+     Возить есть чем — мышью и колесом, — а вот листать без стрелок нечем.
+     Поэтому переход сбрасывает увеличение (см. showShot). */
+  if (e.key === 'ArrowRight') { e.preventDefault(); stepShot(1); }
+  else if (e.key === 'ArrowLeft') { e.preventDefault(); stepShot(-1); }
 });
 
 /* ================= hypotheses section ================= */
@@ -1978,7 +2044,9 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 <!-- просмотр снимка документа во весь экран -->
 <div id="lightbox" role="dialog" aria-label="Снимок документа">
   <button id="lb-close" type="button" aria-label="Закрыть">✕</button>
+  <button id="lb-prev" class="lb-nav" type="button" aria-label="Предыдущий снимок" hidden>‹</button>
   <img id="lb-img" alt="">
+  <button id="lb-next" class="lb-nav" type="button" aria-label="Следующий снимок" hidden>›</button>
   <div id="lb-bar"></div>
 </div>
 <aside class="panel" id="panel" aria-label="Карточка человека">
