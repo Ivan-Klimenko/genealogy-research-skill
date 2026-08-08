@@ -152,80 +152,35 @@ def collect_scans(sources_doc):
 
 
 # --------------------------------------------------------------------------
-# «Куда смотреть на листе» — ВЫЧИСЛЯЕТСЯ из шифра, а не пишется руками
+# Подписи к снимкам — ОТДЕЛЬНАЯ СУЩНОСТЬ, data/scan_captions.yaml
 #
-# 🔴 Соблазн был завести поле и расписать 300 подписей вручную. Но всё, что
-# нужно человеку у метрической книги, В ШИФРЕ УЖЕ ЕСТЬ: часть определяет
-# формуляр, номер записи стоит в крайнем левом столбце, месяц сужает блок,
-# листы подтверждают разворот. Записанное второй раз рукой — это то самое
-# производное, которое ржавеет молча.
-# ⚠️ ГРАНИЦА ЖЁСТКАЯ: локатор строится ТОЛЬКО когда шифр называет ровно один
-# разворот и это тот самый. Иначе непонятно, к какому листу относятся «запись
-# № 141» и «сентябрь», а подпись, уверенно указывающая не туда, хуже пустой.
+# 🔴 ЗДЕСЬ БЫЛ ВЫЧИСЛЯЕМЫЙ ЛОКАТОР, И ЕГО СНЯЛИ 2026-08-08. Он разбирал поле
+# `archive_ref` источника и печатал из него уверенное «часть первая · запись
+# № 189 · крайний левый столбец». Идея была правильная по духу — не хранить
+# производное руками, — но применена не туда: `archive_ref` это ПРОЗА, никем
+# не проверенная. Проверка по машинной расшифровке тех же разворотов дала
+# 109 совпадений из 112 и ТРИ РАСХОЖДЕНИЯ; в src_053 номер записи оказался
+# неверен, и машина сделала эту ошибку заметнее и авторитетнее, чем она была.
+# ⇒ Производное вычисляется из ПРОВЕРЕННОГО. Подпись пишется руками по снимку,
+# открытому глазами, и живёт отдельным файлом с ключом по имени файла: подпись
+# принадлежит РАЗВОРОТУ, а не источнику, и одинаково верна для всех, кто до
+# этого разворота дошёл.
 # --------------------------------------------------------------------------
 
-_PART_RU = {'1': 'часть первая, о родившихся',
-            '2': 'часть вторая, о бракосочетавшихся',
-            '3': 'часть третья, о умерших'}
-# корень → как называть месяц в подписи. Причт пишет «Мартъ», «Генварь», «Іюль»,
-# и нормализовать это перебором окончаний нельзя — только таблицей.
-_MONTHS = [('январ', 'январь'), ('генвар', 'январь'), ('феврал', 'февраль'),
-           ('март', 'март'), ('апрел', 'апрель'), ('май', 'май'), ('мая', 'май'),
-           ('июн', 'июнь'), ('іюн', 'июнь'), ('июл', 'июль'), ('іюл', 'июль'),
-           ('август', 'август'), ('сентябр', 'сентябрь'), ('октябр', 'октябрь'),
-           ('ноябр', 'ноябрь'), ('декабр', 'декабрь')]
 
-
-def scan_locator(ref: str):
-    """Короткая строка «где на листе искать», собранная из archive_ref."""
-    ref = ' '.join(str(ref or '').split())
-    if not ref:
-        return None
-    bits = []
-
-    m = re.search(r'част[ьи]\s+(перв|втор|трет)|\bч\.\s*([123])\b', ref, re.I)
-    if m:
-        key = {'перв': '1', 'втор': '2', 'трет': '3'}.get((m.group(1) or '').lower(), m.group(2))
-        if key in _PART_RU:
-            bits.append(_PART_RU[key])
-
-    # номер записи: «запись м. № 189», «зап. ж. № 272», «брак № 4»,
-    # «запись № 21 женска пола», «женская запись № 19»
-    num = re.search(r'(мужск\w*|женск\w*)?\s*(?:запис[ьи]|зап\.|брак[аи]?)\s*'
-                    r'(м\.|ж\.|мужеска|женска)?\s*'
-                    r'№\s*(\d+(?:\s*,\s*\d+)*)\s*(мужеска|женска)?', ref, re.I)
-    if num:
-        sex = (num.group(1) or num.group(2) or num.group(4) or '').lower()
-        sex = ' мужеска пола' if sex.startswith('м') else (
-              ' женска пола' if sex.startswith('ж') else '')
-        nn = re.sub(r'\s*,\s*', ', ', num.group(3))
-        bits.append(f'запись № {nn}{sex} — крайний левый столбец')
-
-    mon = re.search(r'\b(%s)\w*' % '|'.join(r for r, _ in _MONTHS), ref, re.I)
-    if mon:
-        root = mon.group(1).lower()
-        bits.append('месяц ' + next(w for r, w in _MONTHS if r == root))
-
-    ll = re.search(r'(?:листы|лл\.|л\.)\s*([\d]+\s*(?:об\.)?(?:\s*[—\-/]\s*\d+\s*(?:об\.)?)?)', ref, re.I)
-    if ll:
-        bits.append('листы ' + ' '.join(ll.group(1).split()))
-
-    return ' · '.join(bits) if len(bits) >= 2 else None
-
-
-def build_scan_locators(sources_doc, scans):
-    """{src_id: локатор} — только там, где шифр называет РОВНО ОДИН разворот."""
+def load_scan_captions():
+    """{стем файла: {text, case, eyes}} — то, что написано руками по снимку."""
+    f = project_root / 'data' / 'scan_captions.yaml'
+    if not f.is_file():
+        return {}
+    doc = load_yaml(f) or {}
     out = {}
-    for s in sources_doc.get('sources') or []:
-        sid = s['id']
-        if sid not in scans:
-            continue
-        pairs = {(int(a), int(b)) for a, b in _REF_RE.findall(str(s.get('archive_ref') or ''))}
-        if len(pairs) != 1:
-            continue
-        loc = scan_locator(s.get('archive_ref'))
-        if loc:
-            out[sid] = loc
+    for stem, c in (doc.get('captions') or {}).items():
+        if isinstance(c, dict) and str(c.get('text') or '').strip():
+            out[stem] = {'text': ' '.join(str(c['text']).split('\n')).strip()
+                         if False else str(c['text']).strip(),
+                         'case': str(c.get('case') or '').strip(),
+                         'eyes': str(c.get('eyes') or '').strip()}
     return out
 
 
@@ -711,56 +666,70 @@ details.fold.why .fold-body { font-size: 12.5px; color: var(--muted); padding-bo
 .shot-cap { font-size: 11.5px; color: var(--muted); padding: 4px 6px 5px; line-height: 1.25; }
 
 /* ---------- просмотр снимка во весь экран ---------- */
+/* 🔴 ПОДПИСЬ — ПОЛОСА ПОД СНИМКОМ, А НЕ ПЛАШКА ПОВЕРХ НЕГО. Раньше она висела
+   position: fixed поверх картинки: пока подпись была в одну строку, это сходило
+   с рук, а как выросла до шести — закрыла нижнюю треть листа, то есть ровно те
+   записи, ради которых лист и открывают. Теперь просмотрщик — колонка: сцена
+   с картинкой сверху, подпись снизу, и наехать друг на друга они не могут. */
 #lightbox {
   position: fixed; inset: 0; z-index: 200; display: none;
-  background: rgba(16, 18, 22, .93); align-items: center; justify-content: center;
+  background: rgba(16, 18, 22, .93);
 }
-#lightbox.on { display: flex; }
+#lightbox.on { display: flex; flex-direction: column; }
+#lb-stage {
+  flex: 1 1 auto; min-height: 0; overflow: hidden;
+  display: flex; align-items: center; justify-content: center; padding: 14px 60px 6px;
+}
 #lightbox img {
-  max-width: 96vw; max-height: 88vh; object-fit: contain;
+  max-width: 100%; max-height: 100%; object-fit: contain;
   box-shadow: 0 18px 60px rgba(0, 0, 0, .6); background: #fff;
   cursor: zoom-in;
 }
-/* 🔴 В увеличенном виде картинка больше экрана, и её надо ВОЗИТЬ. Раньше она просто
-   переставала помещаться, а контейнер был центрирующим флексом без прокрутки —
-   видна оставалась только середина листа, то есть ровно не та часть, ради которой
-   увеличивают. Теперь контейнер прокручиваемый, картинка прижата к левому верхнему
-   углу, и её можно тащить мышью. */
-#lightbox.zoomed { display: block; overflow: auto; overscroll-behavior: contain; }
+/* В увеличенном виде лист больше экрана, и его надо ВОЗИТЬ — прокручивается
+   сцена, а подпись остаётся на месте и никуда не уезжает. */
+#lightbox.zoomed #lb-stage { display: block; overflow: auto; overscroll-behavior: contain; padding: 0; }
 #lightbox.zoomed img {
   max-width: none; max-height: none; width: auto; height: auto;
   cursor: grab; display: block; margin: 0;
 }
 #lightbox.zoomed img.dragging { cursor: grabbing; }
+
+/* Подпись: три уровня, одинаковой ширины и по левому краю. Центровка и разная
+   ширина строк — то, из-за чего прежняя подпись читалась как обрывки. */
 #lb-bar {
-  position: fixed; left: 0; right: 0; bottom: 0; padding: 10px 16px 14px;
-  color: #e9edf3; font-size: 13px; text-align: center;
-  background: linear-gradient(transparent, rgba(0, 0, 0, .72));
+  flex: 0 0 auto; padding: 10px 16px 14px; color: #e9edf3; font-size: 13px;
+  background: rgba(8, 10, 13, .92); border-top: 1px solid rgba(255, 255, 255, .09);
 }
-#lb-bar b { color: #fff; }
-/* «Куда смотреть» — единственное, что пишется руками и не выводится ниоткуда,
-   поэтому оно и стоит первым, крупнее прочего. */
-#lb-bar .lb-hint {
-  color: #fff; font-size: 14.5px; line-height: 1.35; margin: 5px auto 2px;
-  max-width: 70ch; text-wrap: balance;
-}
-/* Ручная подсказка отличается от вычисленной: её писал человек, и она про то,
-   чего в шифре нет, — перекрытую печатью строку, дописку другой рукой, вырезку. */
-#lb-bar .lb-hand { color: #ffe6a8; }
-#lb-bar .lb-what { margin-top: 3px; }
-#lb-bar .lb-ref { color: #b9c2cf; font-size: 12px; margin-top: 2px; }
-#lb-bar .lb-ref i { color: #f0c674; font-style: normal; }
-#lb-bar .lb-coord {
-  display: inline-block; margin: 0 0 0 6px; padding: 1px 8px; border-radius: 999px;
+#lb-bar > * { max-width: 78ch; margin-left: auto; margin-right: auto; }
+#lb-bar .lb-line1 { display: flex; gap: 8px; align-items: center; margin-bottom: 5px; }
+#lb-bar .lb-coord, #lb-bar .lb-count {
+  display: inline-block; padding: 1px 9px; border-radius: 999px;
   background: rgba(255, 255, 255, .16); color: #fff;
   font-variant-numeric: tabular-nums; letter-spacing: .02em;
 }
+#lb-bar .lb-count { background: none; color: #96a1b0; padding-left: 0; }
+/* Сама подпись — единственное, ради чего эта полоса существует. */
+#lb-bar .lb-text {
+  color: #fff; font-size: 14.5px; line-height: 1.4; white-space: pre-line;
+  max-height: 27vh; overflow-y: auto;
+}
+#lb-bar .lb-draft { color: #ffe0a3; }
+#lb-bar .lb-none { color: #8d97a5; font-style: italic; font-size: 13px; }
+#lb-bar .lb-line3 {
+  display: flex; gap: 10px; align-items: baseline; justify-content: space-between;
+  margin-top: 7px; color: #97a2b1; font-size: 12px;
+}
+#lb-bar .lb-srcbtn {
+  flex: 0 0 auto; background: rgba(255, 255, 255, .1); color: #dbe3ee;
+  border: 0; border-radius: 999px; padding: 2px 10px; font: inherit; cursor: pointer;
+}
+#lb-bar .lb-srcbtn:hover { background: rgba(255, 255, 255, .2); color: #fff; }
+
 /* Пока лист грузится, старого на экране уже нет — вместо него мерцающая плашка,
    чтобы экран не прыгал и было видно, что идёт загрузка. */
 #lightbox.loading img { visibility: hidden; }
-#lightbox.loading::before {
-  content: ''; position: fixed; left: 50%; top: 50%; width: 54vw; height: 70vh;
-  transform: translate(-50%, -50%); border-radius: 8px;
+#lightbox.loading #lb-stage::before {
+  content: ''; width: 54vw; height: 100%; border-radius: 8px;
   background: rgba(255, 255, 255, .07); animation: lb-pulse 1.1s ease-in-out infinite;
 }
 @keyframes lb-pulse { 0%, 100% { opacity: .45; } 50% { opacity: .9; } }
@@ -770,9 +739,12 @@ details.fold.why .fold-body { font-size: 12.5px; color: var(--muted); padding-bo
   border-radius: 999px; width: 38px; height: 38px; font-size: 20px; cursor: pointer;
 }
 #lb-close:hover { background: rgba(255, 255, 255, .22); }
-#lb-bar .lb-count {
-  display: inline-block; margin-right: 8px; padding: 1px 8px; border-radius: 999px;
-  background: rgba(255, 255, 255, .16); color: #fff; font-variant-numeric: tabular-nums;
+/* Подсветка источника, к которому увела сноска из просмотрщика: без неё
+   непонятно, куда именно перебросило — в карточке источников бывает дюжина. */
+.src-flash { animation: src-flash 1.6s ease-out; }
+@keyframes src-flash {
+  0%, 60% { background: rgba(255, 214, 120, .30); }
+  100% { background: transparent; }
 }
 /* Стрелки листания. 🔴 position: fixed, а не absolute: в увеличенном виде контейнер
    прокручивается, и absolute уехал бы вместе с листом за край экрана. */
@@ -1692,7 +1664,7 @@ function sourceHTML(s, ev) {
   const role = ev && PERSON_ROLE_RU[ev.role]
     ? ` <span class="type">${esc(PERSON_ROLE_RU[ev.role])}${ev.hyp ? ', ' + esc(ev.hyp) : ''}</span>`
     : '';
-  return `<div class="src">
+  return `<div class="src" id="src-${esc(s.id)}">
     <div class="top"><span class="type">${esc(SRC_TYPES[s.type] || s.type)}</span>${role}
       <span class="desc">${esc(s.description)}</span></div>
     ${meta ? `<div class="meta">${esc(meta)}</div>` : ''}
@@ -1850,43 +1822,34 @@ function showShot(i) {
   /* Смена снимка всегда возвращает вид «целиком»: иначе следующий лист открывался бы
      прокрученным в ту точку, которая была осмысленна на предыдущем. */
   el('lightbox').classList.remove('zoomed');
-  el('lightbox').scrollTop = el('lightbox').scrollLeft = 0;
+  el('lb-stage').scrollTop = el('lb-stage').scrollLeft = 0;
   lbZoom = false;
-  /* ================= из чего собрана подпись =================
-     ⚠️ Описание берётся из ИСТОЧНИКА, а не из снимка: один разворот принадлежит
-     нескольким источникам сразу (правило 15 — на скане до пяти записей), и через
-     какой из них человек до него дошёл, решает data-src кнопки.
-     🔴 ПОЭТОМУ ШИФР ИСТОЧНИКА МОЖЕТ БЫТЬ НЕ ПРО ЭТОТ ЛИСТ, и раньше он всё равно
-     печатался под картинкой как её подпись. Так выходит, когда снимок привязался
-     правилом 2 (путь в дословной копии): у src_702 и src_703 копии называют оба
-     разворота, и каждому источнику достаются оба, а шифр у каждого свой.
-     Теперь координата снимка берётся из ИМЕНИ ФАЙЛА — она про сам лист и спорить
-     с ним не может, — а шифр печатается с пометкой, когда он про источник целиком. */
+
+  /* ================= подпись =================
+     🔴 ПОДПИСЬ ПРИНАДЛЕЖИТ СНИМКУ, А НЕ ИСТОЧНИКУ. Разворот — физический объект,
+     и «что на нём и где наша запись» одинаково верно для всех, кто до него дошёл
+     (правило 15: на одном листе бывает пять записей). Раньше подпись собиралась
+     из полей источника и потому у одного листа была разной у разных людей,
+     а у одного человека — вчетверо длиннее нужного.
+     ⚠️ Прозы источника здесь больше нет: описание, отозванные прочтения, номера
+     гипотез — это про наши раскопки, а не про лист. Их дом — карточка человека,
+     куда ведёт кнопка со сноской src_NNN. */
   const many = lbList.length > 1;
   const own = /^d(\d{1,4})_sk(\d{1,4})/i.exec(cur.file);
-  /* ⚠️ Сверять номера НАДО ЧИСЛАМИ, а не строками: в имени файла скан дополнен
-     нулями до трёх знаков (`d237_sk083`), а в шифре он пишется как есть («ск.83»).
-     Строковое сравнение объявляло чужими 43 пары из 92 — и подпись честного листа
-     получала пометку «шифр не этого листа». Поймано на д.237 ск.83. */
-  const key = (a, b) => Number(a) + '/' + Number(b);
-  const refPairs = [...String(s.archive_ref || '')
-    .matchAll(/д\.?\s?(\d{2,4})\b[^.]{0,25}?ск(?:ан|\.)?\s?(\d{1,4})\b/g)]
-    .map(m => key(m[1], m[2]));
-  const covers = own && refPairs.includes(key(own[1], own[2]));
-  /* Локатор ВЫЧИСЛЕН из шифра при сборке и есть только там, где шифр называет
-     ровно один разворот; ручная подсказка — то, что из шифра не выводится. */
-  const loc = refPairs.length === 1 && covers ? SCAN_LOC[cur.src] : null;
-  const hint = (SCAN_HINTS[cur.src] || {})[cur.file.replace(/\.[a-z]+$/i, '')];
+  const cap = SCAN_CAPS[cur.file.replace(/\.[a-z]+$/i, '')] || {};
   el('lb-bar').innerHTML =
-    (many ? `<span class="lb-count">${lbIndex + 1} / ${lbList.length}</span>` : '') +
-    (own ? `<span class="lb-coord">д.${Number(own[1])} ск.${Number(own[2])}</span>` : '') +
-    (loc ? `<div class="lb-hint">${esc(loc)}</div>` : '') +
-    (hint ? `<div class="lb-hint lb-hand">${esc(hint)}</div>` : '') +
-    `<div class="lb-what"><b>${esc(cur.src)}</b> · ${esc(s.description || '')}</div>` +
-    (s.archive_ref
-      ? `<div class="lb-ref">${covers || !refPairs.length ? '' :
-          '<i>шифр источника целиком, не этого листа:</i> '}${esc(s.archive_ref)}</div>`
-      : '');
+    `<div class="lb-line1">` +
+      (own ? `<span class="lb-coord">д.${Number(own[1])} ск.${Number(own[2])}</span>` : '') +
+      (many ? `<span class="lb-count">${lbIndex + 1} / ${lbList.length}</span>` : '') +
+    `</div>` +
+    (cap.text
+      ? `<div class="lb-text${cap.eyes ? '' : ' lb-draft'}">${esc(cap.text)}</div>`
+      : `<div class="lb-text lb-none">Подписи к этому снимку ещё нет.</div>`) +
+    `<div class="lb-line3">` +
+      (cap.case ? `<span class="lb-case">${esc(cap.case)}</span>` : '') +
+      `<button class="lb-srcbtn" type="button" data-gosrc="${esc(cur.src)}"
+               title="Открыть источник в карточке">${esc(cur.src)} ▸</button>` +
+    `</div>`;
   el('lb-prev').hidden = el('lb-next').hidden = !many;
   el('lb-prev').disabled = lbIndex === 0;
   el('lb-next').disabled = lbIndex === lbList.length - 1;
@@ -1917,17 +1880,28 @@ document.addEventListener('click', e => {
   const chip = e.target.closest('[data-person]');
   if (chip) togglePerson(chip.dataset.person);
 });
+/* Сноска src_NNN уводит туда, где проза источника и живёт, — в карточку человека. */
+el('lb-bar').addEventListener('click', e => {
+  const b = e.target.closest('[data-gosrc]');
+  if (!b) return;
+  closeShot();
+  const box = document.getElementById('src-' + b.dataset.gosrc);
+  if (box) { box.scrollIntoView({block: 'center'}); box.classList.add('src-flash'); 
+             setTimeout(() => box.classList.remove('src-flash'), 1600); }
+});
 el('lb-prev').addEventListener('click', e => { e.stopPropagation(); stepShot(-1); });
 el('lb-next').addEventListener('click', e => { e.stopPropagation(); stepShot(1); });
 el('lb-close').addEventListener('click', closeShot);
-el('lightbox').addEventListener('click', e => { if (e.target.id === 'lightbox') closeShot(); });
+el('lightbox').addEventListener('click', e => {
+  if (e.target.id === 'lightbox' || e.target.id === 'lb-stage') closeShot();
+});
 /* Увеличение и перетаскивание. Клик переключает натуральную величину; в этом виде
    контейнер прокручивается, и картинку можно возить мышью — как в любом просмотрщике. */
 el('lb-img').addEventListener('click', e => {
   if (dragMoved) { dragMoved = false; return; }   // отпустили после перетаскивания
-  const box = el('lightbox'), img = el('lb-img');
+  const box = el('lb-stage'), img = el('lb-img');
   lbZoom = !lbZoom;
-  box.classList.toggle('zoomed', lbZoom);
+  el('lightbox').classList.toggle('zoomed', lbZoom);
   if (lbZoom) {
     // держим под курсором ту же точку, по которой кликнули
     const r = img.getBoundingClientRect();
@@ -1940,7 +1914,7 @@ el('lb-img').addEventListener('click', e => {
 let dragFrom = null, dragMoved = false;
 el('lb-img').addEventListener('mousedown', e => {
   if (!lbZoom) return;
-  const box = el('lightbox');
+  const box = el('lb-stage');
   dragFrom = { x: e.clientX, y: e.clientY, l: box.scrollLeft, t: box.scrollTop };
   dragMoved = false;
   el('lb-img').classList.add('dragging');
@@ -1948,7 +1922,7 @@ el('lb-img').addEventListener('mousedown', e => {
 });
 addEventListener('mousemove', e => {
   if (!dragFrom) return;
-  const box = el('lightbox');
+  const box = el('lb-stage');
   box.scrollLeft = dragFrom.l - (e.clientX - dragFrom.x);
   box.scrollTop = dragFrom.t - (e.clientY - dragFrom.y);
   if (Math.abs(e.clientX - dragFrom.x) + Math.abs(e.clientY - dragFrom.y) > 4) dragMoved = true;
@@ -2223,7 +2197,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 <div id="lightbox" role="dialog" aria-label="Снимок документа">
   <button id="lb-close" type="button" aria-label="Закрыть">✕</button>
   <button id="lb-prev" class="lb-nav" type="button" aria-label="Предыдущий снимок" hidden>‹</button>
-  <img id="lb-img" alt="">
+  <div id="lb-stage"><img id="lb-img" alt=""></div>
   <button id="lb-next" class="lb-nav" type="button" aria-label="Следующий снимок" hidden>›</button>
   <div id="lb-bar"></div>
 </div>
@@ -2242,8 +2216,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 const GRAPH_DATA = __GRAPH_JSON__;
 const SOURCES = __SOURCES_JSON__;
 const SCANS_BY_SRC = __SCANS_JSON__;   // {src_id: [файл, …]} — вычислено при сборке
-const SCAN_LOC   = __SCAN_LOC_JSON__;   // {src_id: локатор} — ВЫЧИСЛЕН из шифра при сборке
-const SCAN_HINTS = __SCAN_HINTS_JSON__; // {src_id: {стем файла: подсказка}} — пишется руками, только невыводимое
+const SCAN_CAPS  = __SCAN_CAPS_JSON__;  // {стем файла: {text, case, eyes}} — пишется руками по снимку
 const HYPOTHESES = __HYPOTHESES_JSON__;
 __JS__
 </script>
@@ -2291,11 +2264,7 @@ replacements = {
     '__GRAPH_JSON__': js_json(graph),
     '__SOURCES_JSON__': js_json(sources),
     '__SCANS_JSON__': js_json(_scans),
-    '__SCAN_LOC_JSON__': js_json(build_scan_locators(sources, _scans)),
-    '__SCAN_HINTS_JSON__': js_json({
-        s['id']: s['scan_hints'] for s in (sources.get('sources') or [])
-        if s.get('scan_hints')
-    }),
+    '__SCAN_CAPS_JSON__': js_json(load_scan_captions()),
     '__HYPOTHESES_JSON__': js_json(hypotheses),
     '__JS__': JS,
 }

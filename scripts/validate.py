@@ -827,24 +827,49 @@ for s in sources["sources"]:
             warnings.append(f"source {s['id']}: raw_record лежит в каталоге {f.parts[-2]}, "
                             f"которого нет среди id людей (для находок не о человеке "
                             f"есть оговорённый каталог raw_records/_project/)")
-    # --- scan_hints: «куда смотреть на листе», писанное руками ---------------
-    # 🔴 Ключ — имя файла снимка без расширения, и он обязан существовать. Поле
-    # пишется рукой и потому ржавеет молча: подсказка, ключ которой указывает
-    # в никуда, просто не покажется, и заметить это на странице нечем. Проверено
-    # в тот же день, когда поле заведено: из семнадцати подсказок одна промахнулась
-    # мимо файла на одну цифру в дате внутри имени.
-    hints = s.get("scan_hints")
-    if hints is not None:
-        if not isinstance(hints, dict):
-            errors.append(f"source {s['id']}: scan_hints должен быть словарём "
-                          f"«имя файла без расширения → подсказка»")
-        else:
-            for key, text in hints.items():
-                if key not in SCAN_STEMS:
-                    errors.append(f"source {s['id']}: scan_hints -> снимка {key!r} нет "
-                                  f"среди файлов data/scans/")
-                if not str(text or "").strip():
-                    errors.append(f"source {s['id']}: scan_hints[{key}] пуст")
+
+# --- подписи к снимкам: data/scan_captions.yaml -----------------------------
+# 🔴 ФАЙЛ ПИШЕТСЯ РУКАМИ, и потому у него две проверки, а не одна.
+#   ① ключ обязан указывать на существующий снимок — иначе подпись просто
+#      не покажется, и заметить это на странице нечем;
+#   ② заявленные номера записей сверяются с МАШИННОЙ РАСШИФРОВКОЙ того же
+#      разворота. Это тот самый признак, что поймал «запись № 189» там, где
+#      на листе 184, 170, 171, 172 и 185: номер был неверен в шифре источника,
+#      а страница печатала его как указание, куда смотреть.
+# ⚠️ Расшифровка неполна и на рукописном врёт, поэтому НЕнайденный номер —
+#    предупреждение, а не ошибка: он требует взгляда, а не отмены.
+CAP_FILE = DATA / "scan_captions.yaml"
+if CAP_FILE.is_file():
+    _caps = (yaml.safe_load(CAP_FILE.read_text(encoding="utf-8")) or {}).get("captions") or {}
+    _no_eyes = []
+    for stem, cap in _caps.items():
+        if not isinstance(cap, dict):
+            errors.append(f"scan_captions[{stem}]: должен быть словарём с полем text")
+            continue
+        if stem not in SCAN_STEMS:
+            errors.append(f"scan_captions[{stem}]: такого снимка нет среди файлов data/scans/")
+        if not str(cap.get("text") or "").strip():
+            errors.append(f"scan_captions[{stem}]: пустой text")
+        if not str(cap.get("eyes") or "").strip():
+            _no_eyes.append(stem)
+        m = re.match(r"^d(\d{1,4})_sk(\d{1,4})", stem, re.I)
+        recs = cap.get("records") or []
+        if m and recs:
+            mk = DATA / ".yandex_markup" / f"d{int(m.group(1))}" / f"sk{int(m.group(2)):03d}.txt"
+            if mk.is_file():
+                on_sheet = {int(x) for x in re.findall(r"(?<![\d])(\d{1,4})(?![\d])",
+                                                       mk.read_text(encoding="utf-8"))}
+                lost = [r for r in recs if int(r) not in on_sheet]
+                if lost:
+                    warnings.append(f"scan_captions[{stem}]: номера {lost} не встречаются "
+                                    f"в расшифровке этого разворота — проверить глазами")
+    if _no_eyes:
+        warnings.append(f"подписей к снимкам без отметки «сверено глазами»: {len(_no_eyes)} — "
+                        f"{', '.join(sorted(_no_eyes)[:5])}")
+    CAP_STAT = (f"Подписей к снимкам: {len(_caps)} из {len(SCAN_STEMS)}, "
+                f"сверено глазами {len(_caps) - len(_no_eyes)}")
+else:
+    CAP_STAT = "Подписей к снимкам: файла scan_captions.yaml нет"
 
 # --- сканы: связь с источником ВЫЧИСЛЯЕТСЯ, а не хранится -------------------
 # Имя файла обязано быть `d<дело>_sk<скан>[_что_на_нём].jpg`, и этого достаточно:
@@ -1798,6 +1823,7 @@ print(f"Что хотим узнать: {wish_lines_total} пунктов у {pe
       f"(в среднем {wish_lines_total / max(people_with_wishes, 1):.1f}; "
       f"без открытых вопросов {len(people) - people_with_wishes})")
 print(f"Фронтиров:  {len(frontiers)} — {', '.join(frontiers)}")
+print(CAP_STAT)
 print(f"Источников: {len(sources['sources'])}  "
       f"+ {len(sources.get('planned_resources', []))} неиспользованных ресурсов")
 print(f"Из них с дословной копией в raw_records/: "
