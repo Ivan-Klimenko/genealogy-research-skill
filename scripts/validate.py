@@ -2141,12 +2141,17 @@ def write_status():
         add("У класса обязаны быть `detector` — чем найти остальные такие же — и")
         add("`contaminated` — что могло быть выведено неверно и прочёсано ли это.")
         add("")
-        add("| Класс | Что за приём | Состояние | Ход |")
-        add("|---|---|---|---|")
+        add("| Класс | Что за приём | Чем ловится | Состояние | Ход |")
+        add("|---|---|---|---|---|")
         MARK = {"swept": "🟢 прочёсан", "partial": "⚠️ прочёсан частично", "open": "🔴 не прочёсан"}
         for c in sorted(cl, key=lambda x: (x.get("status") != "open", x.get("id"))):
             mv = ", ".join(f"`{m}`" for m in (c.get("moves") or [])) or "—"
-            add(f"| `{c['id']}` | {str(c.get('name') or '').strip()} | "
+            # ⭐ Признак печатается прямо в витрине: иначе связь «класс → чем
+            # ловится» видна только тому, кто откроет error_log.yaml, а свежий
+            # заход читает STATUS.
+            det = re.sub(r'\s+', ' ', str(c.get('detector') or '')).strip()
+            det = re.sub(r'^[^A-Za-zА-Яа-я]*', '', det)[:70] or '—'
+            add(f"| `{c['id']}` | {str(c.get('name') or '').strip()} | {det} | "
                 f"{MARK.get(c.get('status'), c.get('status'))} | {mv} |")
         add("")
         # ⭐ ЯЗЫК ИСПРАВЛЕНИЯ — СЧЁТЧИК, А НЕ ВОРОТА. Считаем объекты, чья проза
