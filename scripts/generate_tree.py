@@ -737,6 +737,26 @@ for (const h of HYPS) {
   for (const pid of (h.related_people || [])) (hypsByPerson[pid] ||= []).push(h);
 }
 
+/* ================= documents that MENTION a person =================
+   🔴 Карточка долго показывала документы только из `evidence`, и это прятало
+   документы О ЧЕЛОВЕКЕ у другого человека. Живой случай: служебная характеристика
+   деда стояла в `evidence` у его ОТЦА (документ доказывает отчество отца), а у
+   самого деда её не было — и его же бумага со сканом показывалась на отцовской
+   карточке. Владелец проекта заметил это раньше любой проверки.
+   ⇒ Связь «документ упоминает человека» УЖЕ ЕСТЬ в данных (`people_mentioned`),
+   и дублировать её руками в `evidence` значило бы хранить производное руками —
+   ровно то, от чего этот навык отговаривает. Поэтому карточка показывает два
+   разных списка: `evidence` — чем доказано, `people_mentioned` — где упомянут.
+   Смысл `evidence` при этом не размывается: роль там по-прежнему утверждение. */
+const mentionsByPerson = {};
+for (const s of SRC_LIST) {
+  for (const pid of (s.people_mentioned || [])) (mentionsByPerson[pid] ||= []).push(s);
+}
+function mentionsOf(pid) {
+  const own = new Set(((byId[pid] || {}).evidence || []).map(e => e.src));
+  return (mentionsByPerson[pid] || []).filter(s => !own.has(s.id));
+}
+
 /* ================= chain of assumptions =================
    Every person is joined to the subject by a chain of links, and the chain is
    only as strong as its weakest link: one "probable" edge in the middle makes
@@ -1479,13 +1499,16 @@ function wishesHTML(p) {
 /* Снимки, привязанные к источнику: связь вычислена при сборке (SCANS_BY_SRC). */
 function shotsOf(pid) {
   const out = [], seen = new Set();
-  for (const e of (byId[pid] || {}).evidence || []) {
-    for (const file of SCANS_BY_SRC[e.src] || []) {
+  const push = (sid) => {
+    for (const file of SCANS_BY_SRC[sid] || []) {
       if (seen.has(file)) continue;
       seen.add(file);
-      out.push({ file, src: e.src });
+      out.push({ file, src: sid });
     }
-  }
+  };
+  /* сперва то, чем доказано, потом то, где просто упомянут */
+  for (const e of (byId[pid] || {}).evidence || []) push(e.src);
+  for (const s of mentionsOf(pid)) push(s.id);
   return out;
 }
 
@@ -1557,6 +1580,7 @@ function openPerson(id) {
   const roleOf = {};
   (p.evidence || []).forEach(e => { roleOf[e.src] = e; });
   const srcs = (p.evidence || []).map(e => srcById[e.src]).filter(Boolean);
+  const mentions = mentionsOf(p.id);
   const hyps = hypsByPerson[p.id] || [];
 
   el('panel-title').textContent = p.name_ru;
@@ -1594,6 +1618,13 @@ function openPerson(id) {
       <div class="fold-body">${srcs.length
         ? srcs.map(s => sourceHTML(s, roleOf[s.id])).join('')
         : '<div class="empty">Источников пока нет.</div>'}</div></details>
+    ${mentions.length ? `<details class="fold"><summary>Упомянут в документах
+      <span class="count-pill">${mentions.length}</span>
+      <span class="fold-hint">называют его, но ничего о нём не доказывают</span></summary>
+      <div class="fold-body"><div class="empty">Эти документы называют человека, но
+        не приведены как основание чего-либо о нём: ни существования, ни отождествления,
+        ни родства. Чаще всего он там сосед, поручитель или упомянут по ходу разбора.</div>
+        ${mentions.map(s => sourceHTML(s, null)).join('')}</div></details>` : ''}
     <details class="fold"><summary>Гипотезы <span class="count-pill">${hyps.length}</span>
       <span class="fold-hint">${hyps.length ? 'версии и как их проверить' : 'пока нет'}</span></summary>
       <div class="fold-body">${hyps.length ? hyps.map(h => `<div class="hyp-mini">${badge(h.status)}
