@@ -866,8 +866,13 @@ if CAP_FILE.is_file():
     if _no_eyes:
         warnings.append(f"подписей к снимкам без отметки «сверено глазами»: {len(_no_eyes)} — "
                         f"{', '.join(sorted(_no_eyes)[:5])}")
-    CAP_STAT = (f"Подписей к снимкам: {len(_caps)} из {len(SCAN_STEMS)}, "
-                f"сверено глазами {len(_caps) - len(_no_eyes)}")
+    # ⚠️ Знаменатель НАЗВАН нарочно: файлов в data/scans больше, чем снимков
+    # на странице (там же лежат вырезки и дубли под другими именами). Сколько
+    # осталось подписать, считает scripts/caption_worklist.py — он знает
+    # привязку снимков к источникам.
+    CAP_STAT = (f"Подписей к снимкам: {len(_caps)}, сверено глазами "
+                f"{len(_caps) - len(_no_eyes)}; файлов в data/scans: {len(SCAN_STEMS)}. "
+                f"Остаток — caption_worklist.py list")
 else:
     CAP_STAT = "Подписей к снимкам: файла scan_captions.yaml нет"
 
