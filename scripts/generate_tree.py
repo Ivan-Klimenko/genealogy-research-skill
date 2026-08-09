@@ -16,10 +16,9 @@ every link carries its own confidence — which the connector lines now show.
 """
 
 import datetime
-import hashlib
 import json
-import pathlib
 import re
+import sys
 import yaml
 from pathlib import Path
 
@@ -67,120 +66,45 @@ hypotheses = load_yaml(data_dir / 'hypotheses.yaml')
 
 
 # --------------------------------------------------------------------------
-# Изображения документов, привязанные к источникам
+# Снимки документов: связь «на этом листе назван этот человек»
 #
-# 🔴 Связь ВЫЧИСЛЯЕТСЯ, поля `scan` у источника нет — оно было бы производным,
-# набранным руками. Правил два, и оба однозначны:
-#   1. имя файла `d<дело>_sk<скан>[_описание].jpg` ⇄ то же дело и скан в `archive_ref`;
-#   2. любой путь под `data/scans/`, упомянутый в дословной копии (`raw_record`), —
-#      так подхватываются семейные снимки и записи, у которых архивного шифра нет.
-# ⚠️ Связь «многие ко многим»: скан — это разворот, на нём бывает пять записей
-# (правило 15), а сплошной прочёс — один источник на десятки разворотов.
+# 🔴 ЗДЕСЬ БЫЛА САМАЯ ДОРОГАЯ ОШИБКА ЭТОГО ФАЙЛА, СНЯТА 2026-08-09.
+# Снимок доставался человеку цепочкой «человек → источник → координата, добытая
+# регуляркой из прозы archive_ref». Каждое звено оказалось не тем, чем считалось:
+# источник — не документ, а находка на дюжину разворотов; `people_mentioned` —
+# «относится к находке», а не «назван на листе»; координата — проза, которую
+# этот файл и validate.py разбирали РАЗНЫМИ регулярками и расходились на 75
+# источниках. Итог измерения: 777 пар «человек ↔ снимок» на карточках, 68 % из них
+# порождены источником, тянущим больше одного листа. На карточке Павла Сундукова
+# висел двадцать один снимок, о нём было четыре.
+#
+# ⇒ Кто назван на листе — НАБЛЮДЕНИЕ, а не производное, и живёт оно в реестре
+# листов `data/folios.yaml`. Все правила привязки — в модуле `folios.py`, общем
+# для отрисовки, валидатора и рабочего списка: два парсера одной прозы разойтись
+# успели, три разошлись бы тем более.
 # --------------------------------------------------------------------------
 
-_SCAN_RE = re.compile(r'^d(\d{1,4})_sk(\d{1,4})(?:_[a-z0-9_]+)?$', re.I)
-_REF_RE = re.compile(r'д\.?\s?(\d{2,4})\b[^.]{0,25}?ск(?:ан|\.)?\s?(\d{1,4})\b')
-_PATH_RE = re.compile(r'data/scans/[\w./-]+\.(?:jpg|jpeg|png)', re.I)
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import folios as folio_lib  # noqa: E402
 
 
-def _dedupe_identical(web: pathlib.Path, have: dict) -> dict:
-    """Один и тот же снимок под двумя именами — показывать надо один раз.
+def load_folio_registry():
+    """{стем: {text, case, eyes, people}} — реестр листов для страницы.
 
-    🔴 Дедуп ПО СОДЕРЖИМОМУ, а не по имени и не по координате «дело+скан».
-    Имя не годится: `d612_sk287.jpg` и `d612_sk287_yakim_birth.jpg` — один
-    и тот же байт в байт файл, и на карточке Якима он выходил дважды подряд
-    с одинаковой подписью.
-    ⚠️ А координата не годится тем более: у д.1076 ск.29 два файла РАЗНЫЕ —
-    целая страница донесения и вырезанная из неё графа «жена». Вырезка
-    полезнее целого листа, и схлопывать их нельзя.
-    ⇒ Единственный честный признак тождества — совпадение байтов.
-    Из группы одинаковых остаётся имя с самым подробным суффиксом.
+    Подпись принадлежит РАЗВОРОТУ, а не источнику: «что на листе и где наша
+    запись» одинаково верно для всех, кто до этого разворота дошёл (правило 15).
     """
-    if not web.is_dir():
-        return have
-    by_hash = {}
-    for stem, name in have.items():
-        try:
-            digest = hashlib.sha1((web / name).read_bytes()).hexdigest()
-        except OSError:
-            continue
-        by_hash.setdefault(digest, []).append(stem)
-    drop = set()
-    for stems in by_hash.values():
-        if len(stems) < 2:
-            continue
-        keep = max(sorted(stems), key=len)
-        drop |= set(stems) - {keep}
-    return {k: v for k, v in have.items() if k not in drop}
-
-
-def collect_scans(sources_doc):
-    """{src_id: [имя файла без каталога, ...]} — только для существующих картинок."""
-    web = project_root / 'web' / 'scans' / 'view'
-    have = {f.stem: f.name for f in web.iterdir()} if web.is_dir() else {}
-    have = _dedupe_identical(web, have)
-    by_pair = {}
-    for stem in have:
-        m = _SCAN_RE.match(stem)
-        if m:
-            by_pair.setdefault((int(m.group(1)), int(m.group(2))), []).append(stem)
-
     out = {}
-    for s in sources_doc.get('sources') or []:
-        found = []
-        for a, b in _REF_RE.findall(str(s.get('archive_ref') or '')):
-            found += by_pair.get((int(a), int(b)), [])
-        raw = s.get('raw_record')
-        if raw:
-            f = project_root / raw
-            if f.is_file():
-                try:
-                    for path in _PATH_RE.findall(f.read_text(encoding='utf-8')):
-                        stem = pathlib.PurePosixPath(path).stem
-                        if stem in have:
-                            found.append(stem)
-                except OSError:
-                    pass
-        seen, uniq = set(), []
-        for x in found:
-            if x not in seen:
-                seen.add(x)
-                uniq.append(have[x])
-        if uniq:
-            out[s['id']] = uniq
-    return out
-
-
-# --------------------------------------------------------------------------
-# Подписи к снимкам — ОТДЕЛЬНАЯ СУЩНОСТЬ, data/scan_captions.yaml
-#
-# 🔴 ЗДЕСЬ БЫЛ ВЫЧИСЛЯЕМЫЙ ЛОКАТОР, И ЕГО СНЯЛИ 2026-08-08. Он разбирал поле
-# `archive_ref` источника и печатал из него уверенное «часть первая · запись
-# № 189 · крайний левый столбец». Идея была правильная по духу — не хранить
-# производное руками, — но применена не туда: `archive_ref` это ПРОЗА, никем
-# не проверенная. Проверка по машинной расшифровке тех же разворотов дала
-# 109 совпадений из 112 и ТРИ РАСХОЖДЕНИЯ; в src_053 номер записи оказался
-# неверен, и машина сделала эту ошибку заметнее и авторитетнее, чем она была.
-# ⇒ Производное вычисляется из ПРОВЕРЕННОГО. Подпись пишется руками по снимку,
-# открытому глазами, и живёт отдельным файлом с ключом по имени файла: подпись
-# принадлежит РАЗВОРОТУ, а не источнику, и одинаково верна для всех, кто до
-# этого разворота дошёл.
-# --------------------------------------------------------------------------
-
-
-def load_scan_captions():
-    """{стем файла: {text, case, eyes}} — то, что написано руками по снимку."""
-    f = project_root / 'data' / 'scan_captions.yaml'
-    if not f.is_file():
-        return {}
-    doc = load_yaml(f) or {}
-    out = {}
-    for stem, c in (doc.get('captions') or {}).items():
-        if isinstance(c, dict) and str(c.get('text') or '').strip():
-            out[stem] = {'text': ' '.join(str(c['text']).split('\n')).strip()
-                         if False else str(c['text']).strip(),
-                         'case': str(c.get('case') or '').strip(),
-                         'eyes': str(c.get('eyes') or '').strip()}
+    for stem, c in folio_lib.load_folios(data_dir).items():
+        if not isinstance(c, dict):
+            continue
+        out[stem] = {
+            'text': str(c.get('text') or '').strip(),
+            'case': str(c.get('case') or '').strip(),
+            'eyes': str(c.get('eyes') or '').strip(),
+            'people': [{'id': pid, 'as': role, 'record': rec}
+                       for pid, role, rec in folio_lib.folio_people(c)],
+        }
     return out
 
 
@@ -664,6 +588,20 @@ details.fold.why .fold-body { font-size: 12.5px; color: var(--muted); padding-bo
 .shot img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .shot:hover { border-color: var(--male); box-shadow: var(--shadow-sm); }
 .shot-cap { font-size: 11.5px; color: var(--muted); padding: 4px 6px 5px; line-height: 1.25; }
+
+/* ⭐ Снимки сгруппированы по роли человека НА ЛИСТЕ: сперва запись о нём самом,
+   дальше наружу. Заголовок группы отвечает на вопрос, ради которого сюда и пришли, —
+   «а что тут про него». */
+.shot-group + .shot-group { margin-top: 12px; }
+.shot-group-hd {
+  font-size: 11px; letter-spacing: .06em; text-transform: uppercase;
+  color: var(--muted); margin: 0 0 5px 1px;
+}
+.shot-cell { margin: 0; display: flex; flex-direction: column; gap: 2px; }
+.shot-rec { font-size: 11px; color: var(--muted); line-height: 1.2; }
+/* «С ним на листе» — не украшение: правило 15 говорит, что на развороте бывает
+   пять записей, и если лист попал не туда, это должно быть видно с карточки. */
+.shot-who { font-size: 11px; color: var(--muted); line-height: 1.2; }
 
 /* ---------- просмотр снимка во весь экран ---------- */
 /* 🔴 ПОДПИСЬ — ПОЛОСА ПОД СНИМКОМ, А НЕ ПЛАШКА ПОВЕРХ НЕГО. Раньше она висела
@@ -1662,31 +1600,57 @@ function wishesHTML(p) {
   return `<ul class="wishes">${items.map(w => `<li>${esc(w)}</li>`).join('')}</ul>`;
 }
 
-/* Снимки, привязанные к источнику: связь вычислена при сборке (SCANS_BY_SRC). */
-function shotsOf(pid) {
-  const out = [], seen = new Set();
-  const push = (sid) => {
-    for (const file of SCANS_BY_SRC[sid] || []) {
-      if (seen.has(file)) continue;
-      seen.add(file);
-      out.push({ file, src: sid });
-    }
-  };
-  /* сперва то, чем доказано, потом то, где просто упомянут */
-  for (const e of (byId[pid] || {}).evidence || []) push(e.src);
-  for (const s of mentionsOf(pid)) push(s.id);
-  return out;
+/* ================= снимки человека =================
+   🔴 СНИМОК ПОКАЗЫВАЕТСЯ ТОМУ, КОГО РЕЕСТР ЛИСТОВ НАЗЫВАЕТ НА ЭТОМ ЛИСТЕ.
+   Раньше он показывался всякому, кто числился в источнике, а источник бывает
+   сводом на дюжину разворотов о разной родне, — и на карточке человека висела
+   стопка чужих записей. Связь вычислена при сборке (SHOTS_BY_PERSON), правила —
+   в scripts/folios.py.
+
+   ⚠️ Группы идут от самого человека наружу: сперва запись о нём, потом та, где
+   он назван родителем, потом поручительство и восприемничество. Кто ещё назван
+   на листе — печатается прямо под снимком: если лист попал не туда, это должно
+   быть видно с карточки, а не через месяц.                                     */
+function shotsOf(pid) { return SHOTS_BY_PERSON[pid] || []; }
+
+/** Кто ещё назван на этом листе — короткой строкой под снимком. */
+function shotWho(shot, pid) {
+  const f = FOLIOS[shot.stem];
+  if (!f || !(f.people || []).length) return '';
+  const rest = f.people.filter(x => x.id !== pid && byId[x.id]);
+  if (!rest.length) return '';
+  return rest.map(x => byId[x.id].name_ru || x.id).join(', ');
 }
 
 function shotsHTML(pid) {
   const shots = shotsOf(pid);
   if (!shots.length) return '';
+  const groups = [];
+  for (const s of shots) {
+    /* Лист, ещё не разобранный по людям, приходит без роли: он взят через
+       источник, разбирающий ровно один разворот. Это переходное основание,
+       и оно названо своим именем, а не выдано за разбор. */
+    const key = s.role || '_pending';
+    const g = groups.find(x => x.key === key);
+    if (g) g.items.push(s); else groups.push({ key, items: [s] });
+  }
+  const body = groups.map(g => `
+    <div class="shot-group">
+      <div class="shot-group-hd">${esc(ROLE_GROUP[g.key] || 'Лист ещё не разобран по людям')}</div>
+      <div class="shots">${g.items.map(s => {
+        const who = shotWho(s, pid);
+        return `<figure class="shot-cell">
+          <button class="shot" data-shot="${esc(s.file)}" data-src="${esc(s.srcs[0] || '')}"
+                  title="открыть крупно">
+            <img loading="lazy" src="scans/thumb/${esc(s.file)}" alt="${esc(s.stem)}">
+          </button>
+          ${s.record ? `<figcaption class="shot-rec">запись № ${esc(String(s.record))}</figcaption>` : ''}
+          ${who ? `<figcaption class="shot-who">с ним на листе: ${esc(who)}</figcaption>` : ''}
+        </figure>`;
+      }).join('')}</div>
+    </div>`).join('');
   return `<h3>Документы <span class="count-pill">${shots.length}</span></h3>
-    <div class="shots">${shots.map(s => `
-      <button class="shot" data-shot="${esc(s.file)}" data-src="${esc(s.src)}"
-              title="${esc(s.src)} — открыть крупно">
-        <img loading="lazy" src="scans/thumb/${esc(s.file)}" alt="${esc(s.src)}">
-      </button>`).join('')}</div>
+    ${body}
     <div class="shot-cap">Нажмите на снимок, чтобы открыть его во весь экран; там же — увеличение
       по клику.${shots.length > 1
         ? ' Листать снимки этого человека — стрелками ← → или кнопками по краям.'
@@ -1877,7 +1841,7 @@ function showShot(i) {
      куда ведёт кнопка со сноской src_NNN. */
   const many = lbList.length > 1;
   const own = /^d(\d{1,4})_sk(\d{1,4})/i.exec(cur.file);
-  const cap = SCAN_CAPS[cur.file.replace(/\.[a-z]+$/i, '')] || {};
+  const cap = FOLIOS[cur.file.replace(/\.[a-z]+$/i, '')] || {};
   el('lb-bar').innerHTML =
     `<div class="lb-line1">` +
       (own ? `<span class="lb-coord">д.${Number(own[1])} ск.${Number(own[2])}</span>` : '') +
@@ -1902,7 +1866,10 @@ function showShot(i) {
 }
 
 function openShot(btn) {
-  const gallery = btn.closest('.shots');
+  /* ⚠️ Лента — ВСЕ снимки карточки, а не одна группа: снимки разбиты по роли
+     человека на листе, и упереться стрелкой в конец группы означало бы, что
+     половина документов человека недостижима с клавиатуры. */
+  const gallery = btn.closest('.panel-body') || btn.closest('.shots');
   const btns = gallery ? [...gallery.querySelectorAll('[data-shot]')] : [btn];
   lbList = btns.map(b => ({ file: b.dataset.shot, src: b.dataset.src }));
   el('lightbox').classList.add('on');
@@ -2266,8 +2233,9 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 <script>
 const GRAPH_DATA = __GRAPH_JSON__;
 const SOURCES = __SOURCES_JSON__;
-const SCANS_BY_SRC = __SCANS_JSON__;   // {src_id: [файл, …]} — вычислено при сборке
-const SCAN_CAPS  = __SCAN_CAPS_JSON__;  // {стем файла: {text, case, eyes}} — пишется руками по снимку
+const SHOTS_BY_PERSON = __SHOTS_JSON__;  // {person_id: [{file, stem, role, record, srcs, basis}]}
+const FOLIOS = __FOLIOS_JSON__;          // реестр листов: {стем: {text, case, eyes, people}}
+const ROLE_GROUP = __ROLE_GROUP_JSON__;  // заголовки групп — из folios.py, чтобы не разошлись
 const HYPOTHESES = __HYPOTHESES_JSON__;
 __JS__
 </script>
@@ -2296,7 +2264,9 @@ subtitle = ('{} человек ({} требуют исследования, {} �
     gen_levels,
 )
 
-_scans = collect_scans(sources)
+_folios = load_folio_registry()
+_have = folio_lib.web_scans(project_root)
+_shots = folio_lib.attach(graph, sources, folio_lib.load_folios(data_dir), _have, project_root)
 
 replacements = {
     '__TITLE__': title,
@@ -2314,8 +2284,9 @@ replacements = {
     '__CSS__': CSS,
     '__GRAPH_JSON__': js_json(graph),
     '__SOURCES_JSON__': js_json(sources),
-    '__SCANS_JSON__': js_json(_scans),
-    '__SCAN_CAPS_JSON__': js_json(load_scan_captions()),
+    '__SHOTS_JSON__': js_json(_shots),
+    '__FOLIOS_JSON__': js_json(_folios),
+    '__ROLE_GROUP_JSON__': js_json(folio_lib.ROLE_GROUP),
     '__HYPOTHESES_JSON__': js_json(hypotheses),
     '__JS__': JS,
 }

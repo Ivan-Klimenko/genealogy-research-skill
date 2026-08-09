@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Что осталось подписать и чем себе помочь при подписывании.
+"""Что осталось разобрать по листам и чем себе помочь при разборе.
 
 🔴 ЗАЧЕМ ЭТОТ СКРИПТ ЛЕЖИТ В НАВЫКЕ, А НЕ ВО ВРЕМЕННОМ КАТАЛОГЕ.
 Прогон подписей к снимкам — работа на много заходов и на разные сессии.
@@ -10,24 +10,36 @@
 инструмента, которым их делали.
 
 ⭐ И главное: «где я остановился» здесь НИГДЕ НЕ ХРАНИТСЯ. Остаток
-ВЫЧИСЛЯЕТСЯ — снимки, у которых нет записи в data/scan_captions.yaml.
-Значит его нельзя рассинхронизировать, забыть обновить или потерять.
+ВЫЧИСЛЯЕТСЯ — снимки, у которых в data/folios.yaml нет подписи либо
+не разобрано `people`. Значит его нельзя рассинхронизировать, забыть
+обновить или потерять.
+
+🔴 РАБОТЫ ДВЕ, И ГЛАВНАЯ — ВТОРАЯ. Подпись отвечает «что на этом листе»,
+`people` — «кто на нём назван», и только вторая доводит снимок до карточки
+человека. До 2026-08-09 второй не было вовсе: снимок доставался всякому,
+кто числился в источнике, а источник бывает сводом на дюжину разворотов
+о разной родне. На карточке Павла Сундукова висел двадцать один снимок,
+о нём было четыре.
 
 Команды
 -------
-    caption_worklist.py list [СКОЛЬКО]     что подписать дальше, с контекстом
+    caption_worklist.py list [СКОЛЬКО]     что разобрать дальше, с контекстом
     caption_worklist.py halves ИМЯ ...     нарезать половины разворотов
     caption_worklist.py sheet ДЕЛО:СКАН    черновик из машинной расшифровки
-    caption_worklist.py add < file.json    дописать подписи (JSON на stdin)
+    caption_worklist.py add < file.json    дописать записи реестра (JSON на stdin)
 
 Формат JSON для add:
-    {"стем_файла": {"case": "...", "records": [1,2], "text": "..."}, ...}
+    {"стем_файла": {"case": "...", "records": [1, 2], "text": "...",
+                    "people": [{"id": "yakim_chemodanov", "as": "subject",
+                                "record": 184}],
+                    "sources": ["src_053"]}}
+Роли `as` — folios.ROLES: subject · deceased · parent · spouse ·
+godparent · witness · mentioned.
 Поле eyes проставляется само сегодняшней датой — команда вызывается
 ТОЛЬКО после того, как снимок открыт и прочитан глазами.
 """
 import collections
 import datetime
-import hashlib
 import json
 import os
 import pathlib
@@ -52,14 +64,15 @@ def _find_project(start=None):
 
 BASE = _find_project()
 DATA = BASE / "data"
-CAPS = DATA / "scan_captions.yaml"
+CAPS = DATA / "folios.yaml"
 VIEW = BASE / "web" / "scans" / "view"
 MARKUP = DATA / ".yandex_markup"
 WORK = BASE / ".captions_work"      # нарезанные половины; в .gitignore
 
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+import folios as folio_lib  # noqa: E402
+
 _SCAN_RE = re.compile(r"^d(\d{1,4})_sk(\d{1,4})(?:_[a-z0-9_]+)?$", re.I)
-_REF_RE = re.compile(r"д\.?\s?(\d{2,4})\b[^.]{0,25}?ск(?:ан|\.)?\s?(\d{1,4})\b")
-_PATH_RE = re.compile(r"data/scans/[\w./-]+\.(?:jpg|jpeg|png)", re.I)
 
 
 def load(name):
@@ -67,105 +80,73 @@ def load(name):
         return yaml.safe_load(f)
 
 
-def collect_scans(sources_doc):
-    """{src_id: [файл, ...]} — та же логика, что в generate_tree.py.
-
-    ⚠️ Дублирование намеренное и его надо помнить: generate_tree.py
-    собирает связь для страницы, здесь она нужна для рабочего списка.
-    Если правила привязки изменятся, править надо оба места.
-    """
-    have = {f.stem: f.name for f in VIEW.iterdir()} if VIEW.is_dir() else {}
-    # 🔴 Дедуп ПО СОДЕРЖИМОМУ — тот же, что в generate_tree.py. Без него
-    # рабочий список зовёт подписывать один разворот дважды: один и тот же
-    # файл лежит под двумя именами (`d612_sk287` и `d612_sk287_yakim_birth`).
-    # Поймано скриптом на себе же в первый прогон.
-    by_hash = {}
-    for stem, name in have.items():
-        try:
-            by_hash.setdefault(hashlib.sha1((VIEW / name).read_bytes()).hexdigest(),
-                               []).append(stem)
-        except OSError:
-            pass
-    drop = set()
-    for stems in by_hash.values():
-        if len(stems) > 1:
-            drop |= set(stems) - {max(sorted(stems), key=len)}
-    have = {k: v for k, v in have.items() if k not in drop}
-    by_pair = {}
-    for stem in have:
-        m = _SCAN_RE.match(stem)
-        if m:
-            by_pair.setdefault((int(m.group(1)), int(m.group(2))), []).append(stem)
-    out = {}
-    for s in sources_doc.get("sources") or []:
-        found = []
-        for a, b in _REF_RE.findall(str(s.get("archive_ref") or "")):
-            found += by_pair.get((int(a), int(b)), [])
-        raw = s.get("raw_record")
-        if raw and (BASE / raw).is_file():
-            try:
-                for path in _PATH_RE.findall((BASE / raw).read_text(encoding="utf-8")):
-                    stem = pathlib.PurePosixPath(path).stem
-                    if stem in have:
-                        found.append(stem)
-            except OSError:
-                pass
-        seen, uniq = set(), []
-        for x in found:
-            if x not in seen:
-                seen.add(x)
-                uniq.append(have[x])
-        if uniq:
-            out[s["id"]] = uniq
-    return out
-
-
 def state():
+    """Что осталось сделать по листам, по убыванию цены.
+
+    🔴 ЗДЕСЬ ЛЕЖАЛА КОПИЯ ПРАВИЛ ПРИВЯЗКИ, и в комментарии честно стояло
+    «дублирование намеренное, править надо оба места». Править оба места
+    не стали, и копии разошлись: 2026-08-09 выяснилось, что рабочий список
+    строится тем же сломанным правилом, что и страница, — а значит двадцать
+    пять снимков в очередь не попадали НИКОГДА, и «153 из 153» означало
+    «153 из 153 достижимых». Счётчик был честен, множество — нет.
+    ⇒ Правила теперь одни на всех, в folios.py.
+
+    ⭐ Работы стало две, и они разной природы:
+      `caption` — листа нет в реестре, про него не сказано ничего;
+      `people`  — подпись есть, а кто на листе назван — не разобрано.
+    Вторая и есть то, чем снимок доезжает до карточки человека.
+    """
     graph, sources = load("family_graph.yaml"), load("sources.yaml")
-    caps = (yaml.safe_load(CAPS.read_text(encoding="utf-8")) if CAPS.is_file() else None) or {}
-    done = set(caps.get("captions") or {})
-    scans = collect_scans(sources)
+    reg = folio_lib.load_folios(DATA)
+    have = folio_lib.web_scans(BASE)
     S = {s["id"]: s for s in sources["sources"]}
     P = {p["id"]: p for p in graph["people"]}
-    ment = collections.defaultdict(list)
+    coord = folio_lib.by_coord(have)
+    srcs_of = collections.defaultdict(set)
     for s in sources["sources"]:
-        for pid in (s.get("people_mentioned") or []):
-            ment[pid].append(s["id"])
-    where, srcs_of = collections.defaultdict(set), collections.defaultdict(set)
-    for p in graph["people"]:
-        seen = set()
-        for sid in [e["src"] for e in (p.get("evidence") or [])] + ment[p["id"]]:
-            for f in scans.get(sid, []):
-                if f in seen:
-                    continue
-                seen.add(f)
-                where[f].add(p["id"])
-                srcs_of[f].add(sid)
+        for stem in folio_lib.source_folios(s, have, coord, BASE):
+            srcs_of[stem].add(s["id"])
+    # ⚠️ Цена листа — прямая линия, а не число карточек: карточек у листа сейчас
+    # может не быть вовсе (он для того и в очереди), а вот назван ли на нём кто-то
+    # с полотна — видно по источникам, которые его разбирают.
     vis = {p["id"] for p in graph["people"] if p.get("visible")}
+    near = collections.defaultdict(set)
+    for stem, sids in srcs_of.items():
+        for sid in sids:
+            near[stem] |= set(S[sid].get("people_mentioned") or [])
     rows = []
-    for f, who in where.items():
-        stem = pathlib.PurePosixPath(f).stem
-        if stem in done:
+    for stem in sorted(have):
+        entry = reg.get(stem) or {}
+        has_cap = bool(str(entry.get("text") or "").strip())
+        has_people = folio_lib.folio_resolved(entry)
+        if has_cap and has_people:
             continue
-        rows.append((0 if who & vis else 1, -len(who), f, stem,
-                     sorted(who), sorted(srcs_of[f])))
+        who = near.get(stem, set())
+        rows.append((0 if who & vis else 1, -len(who), stem,
+                     "caption" if not has_cap else "people",
+                     sorted(who), sorted(srcs_of.get(stem, ()))))
     rows.sort()
-    return rows, S, P, len(done), len(where)
+    done_cap = sum(1 for stem in have if str((reg.get(stem) or {}).get("text") or "").strip())
+    done_ppl = sum(1 for stem in have if folio_lib.folio_resolved(reg.get(stem) or {}))
+    return rows, S, P, done_cap, done_ppl, len(have)
 
 
 def cmd_list(argv):
-    rows, S, P, done, total = state()
+    rows, S, P, done_cap, done_ppl, total = state()
     hi = int(argv[0]) if argv else 3
-    print(f"ПОДПИСАНО {done} из {total}; осталось {len(rows)}, "
-          f"на прямой линии {sum(1 for r in rows if r[0] == 0)}\n")
-    for i, (line, negn, f, stem, who, sids) in enumerate(rows[:hi]):
+    print(f"ЛИСТОВ {total}: подписано {done_cap}, разобрано по людям {done_ppl}. "
+          f"Осталось {len(rows)}, на прямой линии {sum(1 for r in rows if r[0] == 0)}\n")
+    for i, (line, negn, stem, need, who, sids) in enumerate(rows[:hi]):
         m = _SCAN_RE.match(stem)
         cached = bool(m) and (MARKUP / f"d{int(m.group(1))}" /
                               f"sk{int(m.group(2)):03d}.txt").is_file()
         print("=" * 78)
         print(f"[{i}] {stem}  {'прямая линия' if line == 0 else 'боковая'}, "
-              f"{-negn} карточек, расшифровка {'есть' if cached else 'НЕТ'}")
-        print("     кому: " + ", ".join(P[w]["name_ru"] for w in who))
+              f"нужно: {'подпись и люди' if need == 'caption' else 'РАЗБОР ПО ЛЮДЯМ'}, "
+              f"расшифровка {'есть' if cached else 'НЕТ'}")
+        if who:
+            print("     кандидаты (кого называют источники этого листа — НЕ разбор, "
+                  "а подсказка): " + ", ".join(P[w]["name_ru"] for w in who if w in P))
         for sid in sids:
             g = lambda k, n: " ".join(str(S[sid].get(k) or "").split())[:n]
             print(f"  ── {sid} ({S[sid].get('type')})")
@@ -235,6 +216,18 @@ def cmd_sheet(args):
 
 
 def cmd_add(_):
+    """Дописать записи реестра. JSON на stdin, ключ — стем файла снимка.
+
+    {"d612_sk287_yakim_birth": {"case": "...", "records": [184, 170],
+                                "text": "...",
+                                "people": [{"id": "yakim_chemodanov",
+                                            "as": "subject", "record": 184}]}}
+
+    ⚠️ `eyes` проставляется само сегодняшней датой — команда вызывается ТОЛЬКО
+    после того, как снимок открыт и прочитан глазами. Кто назван на листе —
+    утверждение того же веса, что и подпись, и выводить его из чужой прозы
+    нельзя: сопоставление имён даёт тёзок, а не людей (правило 1).
+    """
     data = json.load(sys.stdin)
     eyes = datetime.date.today().isoformat()
     text = CAPS.read_text(encoding="utf-8")
@@ -248,6 +241,20 @@ def cmd_add(_):
             out.append(f"    case: {c['case']}")
         if c.get("records"):
             out.append("    records: [" + ", ".join(str(x) for x in c["records"]) + "]")
+        # ⚠️ Ключ пишется, даже когда список пуст: `people: []` означает «смотрели,
+        # наших нет» — это РАЗБОР, а не его отсутствие (folios.folio_resolved).
+        if "people" in c:
+            if not c["people"]:
+                out.append("    people: []")
+            else:
+                out.append("    people:")
+                for item in c["people"]:
+                    bits = [f"id: {item['id']}", f"as: {item.get('as', 'mentioned')}"]
+                    if item.get("record") is not None:
+                        bits.append(f"record: {item['record']}")
+                    out.append("    - {" + ", ".join(bits) + "}")
+        if c.get("sources"):
+            out.append("    sources: [" + ", ".join(c["sources"]) + "]")
         out.append("    text: |-")
         for par in str(c["text"]).strip().split("\n\n"):
             out += ["      " + " ".join(par.split()), ""]
@@ -256,8 +263,8 @@ def cmd_add(_):
         text = text.rstrip("\n") + "\n\n" + "\n".join(out) + "\n"
         added.append(stem)
     CAPS.write_text(text, encoding="utf-8")
-    caps = (yaml.safe_load(CAPS.read_text(encoding="utf-8")) or {}).get("captions") or {}
-    print(f"добавлено {len(added)}, всего подписей {len(caps)}")
+    reg = (yaml.safe_load(CAPS.read_text(encoding="utf-8")) or {}).get("folios") or {}
+    print(f"добавлено {len(added)}, всего записей в реестре {len(reg)}")
 
 
 if __name__ == "__main__":

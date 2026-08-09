@@ -778,9 +778,24 @@ for rule in (rmap.get("discovery_rules") or []):
 # ИСТОЧНИКИ, ГИПОТЕЗЫ, ОЧЕРЕДЬ (как в v1)
 # ===========================================================================
 
-# Имена всех имеющихся снимков без расширения — на них ссылается scan_hints.
+# Имена всех имеющихся снимков без расширения — на них ссылается реестр листов.
 SCAN_STEMS = {f.stem for f in (DATA / "scans").rglob("*")
               if f.suffix.lower() in (".jpg", ".jpeg", ".png")}
+
+# ⭐ Правила привязки «на этом листе назван этот человек» живут в ОДНОМ месте —
+# scripts/folios.py, общем для валидатора, отрисовки и рабочего списка. До
+# 2026-08-09 их было два экземпляра, и они разошлись: валидатор насчитывал
+# 793 пары «дело+скан» из прозы archive_ref, отрисовка — 462. Валидатор тогда
+# говорил «привязано» ровно там, где страница снимок не показывала.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import folios as folio_lib  # noqa: E402
+
+FOLIO_ROLES = set(folio_lib.ROLES)
+FOLIO_DISK = folio_lib.disk_scans(BASE)
+FOLIO_HAVE = folio_lib.web_scans(BASE)
+_folio_debt = folio_lib.debt(graph, sources, folio_lib.load_folios(DATA), FOLIO_HAVE, BASE)
+FOLIO_UNREACHABLE = _folio_debt["unreachable"]
+FOLIO_WIDE = _folio_debt["wide_sources"]
 
 for s in sources["sources"]:
     if sources.get("meta", {}).get("types") and s.get("type") not in sources["meta"]["types"]:
@@ -828,116 +843,172 @@ for s in sources["sources"]:
                             f"которого нет среди id людей (для находок не о человеке "
                             f"есть оговорённый каталог raw_records/_project/)")
 
-# --- подписи к снимкам: data/scan_captions.yaml -----------------------------
-# 🔴 ФАЙЛ ПИШЕТСЯ РУКАМИ, и потому у него две проверки, а не одна.
+# 🔴 ДОСЛОВНАЯ КОПИЯ, КОТОРУЮ НЕ НАЗЫВАЕТ НИ ОДИН ИСТОЧНИК, — это находка, лежащая
+# мимо проекта. Проверка заведена 2026-08-09, и первый прогон нашёл четыре штуки,
+# из них одну настоящую: записи тёти о роде Ерошиных вместе с ЕДИНСТВЕННОЙ известной
+# фотографией прапрадеда и прапрабабушки. Копия лежала три дня, снимки не показывались
+# никому, и увидеть это было нечем — все проверки смотрели от источника наружу,
+# а не от файла внутрь.
+# ⚠️ Предупреждение, а не ошибка: копия бывает черновиком разведки, который правильно
+# не проводить. Но молчать о ней нельзя.
+_raw_used = {s.get("raw_record") for s in sources["sources"] if s.get("raw_record")}
+_raw_orphan = sorted(
+    str(f.relative_to(BASE)) for f in (DATA / "raw_records").rglob("*.txt")
+    if str(f.relative_to(BASE)) not in _raw_used) if (DATA / "raw_records").is_dir() else []
+if _raw_orphan:
+    warnings.append(f"дословных копий, на которые не ссылается ни один источник: "
+                    f"{len(_raw_orphan)} — " + ", ".join(_raw_orphan[:4])
+                    + ". Находка лежит в проекте и в проект не проведена (правило 17)")
+
+# --- реестр листов: data/folios.yaml ----------------------------------------
+# 🔴 ЛИСТ — ПЕРВОКЛАССНАЯ СУЩНОСТЬ С 2026-08-09, и это ответ на самую дорогую
+# ошибку страницы. До того «снимок принадлежит человеку» вычислялось цепочкой
+# «человек → источник → координата, добытая регуляркой из прозы archive_ref»,
+# причём регулярка здесь и регулярка в generate_tree.py были РАЗНЫЕ: валидатор
+# видел 793 пары «дело+скан», отрисовка 462, расходились на 75 источниках.
+# Итог: 777 пар «человек ↔ снимок» на карточках, 68 % из них — от источников,
+# тянущих больше одного разворота. Модель в принципе не знала, чей это лист.
+#
+# ⇒ Теперь связь пишется руками в реестре (наблюдение, не производное), парсер
+# координат один на все скрипты и лежит в scripts/folios.py, а здесь проверяется
+# то, что проверяемо: ссылки, номера записей и РАЗМЕР ДОЛГА.
+#
+# ⚠️ Проверок у реестра три, и каждая куплена случаем.
 #   ① ключ обязан указывать на существующий снимок — иначе подпись просто
 #      не покажется, и заметить это на странице нечем;
 #   ② заявленные номера записей сверяются с МАШИННОЙ РАСШИФРОВКОЙ того же
-#      разворота. Это тот самый признак, что поймал «запись № 189» там, где
-#      на листе 184, 170, 171, 172 и 185: номер был неверен в шифре источника,
-#      а страница печатала его как указание, куда смотреть.
-# ⚠️ Расшифровка неполна и на рукописном врёт, поэтому НЕнайденный номер —
-#    предупреждение, а не ошибка: он требует взгляда, а не отмены.
-CAP_FILE = DATA / "scan_captions.yaml"
+#      разворота. Это тот признак, что поймал «запись № 189» там, где на листе
+#      184, 170, 171, 172 и 185: номер был неверен в шифре источника, а страница
+#      печатала его как указание, куда смотреть;
+#   ③ человек, названный на листе, должен хоть как-то встречаться в расшифровке
+#      этого разворота. Это НЕ доказательство привязки — тёзки, — но промах
+#      она ловит, а расшифровка есть почти у всех наших листов.
+CAP_FILE = DATA / "folios.yaml"
 if CAP_FILE.is_file():
-    _caps = (yaml.safe_load(CAP_FILE.read_text(encoding="utf-8")) or {}).get("captions") or {}
-    _no_eyes = []
+    _caps = (yaml.safe_load(CAP_FILE.read_text(encoding="utf-8")) or {}).get("folios") or {}
+    _no_eyes, _resolved = [], 0
+
+    def _markup_of(stem):
+        m = re.match(r"^d(\d{1,4})_sk(\d{1,4})", stem, re.I)
+        if not m:
+            return None
+        mk = DATA / ".yandex_markup" / f"d{int(m.group(1))}" / f"sk{int(m.group(2)):03d}.txt"
+        return mk.read_text(encoding="utf-8") if mk.is_file() else None
+
+    def _fold(t):
+        """Дореформенное письмо к нынешнему — иначе «Ѳеодоръ» не найдётся никогда."""
+        t = t.lower()
+        for a, b in (("ѣ", "е"), ("і", "и"), ("ъ", ""), ("ь", ""), ("ѳ", "ф"),
+                     ("ѵ", "и"), ("ё", "е")):
+            t = t.replace(a, b)
+        return t
+
     for stem, cap in _caps.items():
         if not isinstance(cap, dict):
-            errors.append(f"scan_captions[{stem}]: должен быть словарём с полем text")
+            errors.append(f"folios[{stem}]: должен быть словарём с полем text")
             continue
         if stem not in SCAN_STEMS:
-            errors.append(f"scan_captions[{stem}]: такого снимка нет среди файлов data/scans/")
+            errors.append(f"folios[{stem}]: такого снимка нет среди файлов data/scans/")
         if not str(cap.get("text") or "").strip():
-            errors.append(f"scan_captions[{stem}]: пустой text")
+            errors.append(f"folios[{stem}]: пустой text")
         if not str(cap.get("eyes") or "").strip():
             _no_eyes.append(stem)
-        m = re.match(r"^d(\d{1,4})_sk(\d{1,4})", stem, re.I)
+        markup = _markup_of(stem)
         recs = cap.get("records") or []
-        if m and recs:
-            mk = DATA / ".yandex_markup" / f"d{int(m.group(1))}" / f"sk{int(m.group(2)):03d}.txt"
-            if mk.is_file():
-                on_sheet = {int(x) for x in re.findall(r"(?<![\d])(\d{1,4})(?![\d])",
-                                                       mk.read_text(encoding="utf-8"))}
-                lost = [r for r in recs if int(r) not in on_sheet]
-                if lost:
-                    warnings.append(f"scan_captions[{stem}]: номера {lost} не встречаются "
-                                    f"в расшифровке этого разворота — проверить глазами")
+        if markup is not None and recs:
+            on_sheet = {int(x) for x in re.findall(r"(?<![\d])(\d{1,4})(?![\d])", markup)}
+            lost = [r for r in recs if int(r) not in on_sheet]
+            if lost:
+                warnings.append(f"folios[{stem}]: номера {lost} не встречаются "
+                                f"в расшифровке этого разворота — проверить глазами")
+        # --- кто назван на листе
+        seen_here = set()
+        if cap.get("people") is not None and not isinstance(cap.get("people"), list):
+            errors.append(f"folios[{stem}]: people должен быть списком")
+        for item in (cap.get("people") or []):
+            if not isinstance(item, dict) or not item.get("id"):
+                errors.append(f"folios[{stem}]: в people нужен словарь с полем id")
+                continue
+            pid = item["id"]
+            if pid not in pids:
+                errors.append(f"folios[{stem}]: people -> несуществующий {pid}")
+                continue
+            if pid in seen_here:
+                errors.append(f"folios[{stem}]: {pid} назван в people дважды")
+            seen_here.add(pid)
+            role = item.get("as")
+            if role is not None and role not in FOLIO_ROLES:
+                errors.append(f"folios[{stem}]: неизвестная роль as={role!r} у {pid} "
+                              f"(можно: {', '.join(sorted(FOLIO_ROLES))})")
+            if item.get("record") is not None and markup is not None:
+                on_sheet = {int(x) for x in re.findall(r"(?<![\d])(\d{1,4})(?![\d])", markup)}
+                if int(item["record"]) not in on_sheet:
+                    warnings.append(f"folios[{stem}]: запись № {item['record']} ({pid}) "
+                                    f"не встречается в расшифровке разворота")
+            if markup is not None:
+                # ⚠️ Ищем ИМЯ, не отчество и не фамилию: отчество ложный различитель
+                # (правило 3), а фамилий в дореформенной метрике часто нет вовсе.
+                given = _fold((by_id[pid].get("name_ru") or "").split()[:1] and
+                              (by_id[pid]["name_ru"].split()[0]) or "")[:4]
+                if given and given not in _fold(markup):
+                    warnings.append(f"folios[{stem}]: {pid} назван на листе, но имени "
+                                    f"«{by_id[pid]['name_ru'].split()[0]}» нет "
+                                    f"в расшифровке разворота — проверить глазами")
+        for sid in (cap.get("sources") or []):
+            if sid not in sids:
+                errors.append(f"folios[{stem}]: sources -> несуществующий {sid}")
+        if folio_lib.folio_resolved(cap):
+            _resolved += 1
     if _no_eyes:
         warnings.append(f"подписей к снимкам без отметки «сверено глазами»: {len(_no_eyes)} — "
                         f"{', '.join(sorted(_no_eyes)[:5])}")
-    # ⚠️ Знаменатель НАЗВАН нарочно: файлов в data/scans больше, чем снимков
-    # на странице (там же лежат вырезки и дубли под другими именами). Сколько
-    # осталось подписать, считает scripts/caption_worklist.py — он знает
-    # привязку снимков к источникам.
-    CAP_STAT = (f"Подписей к снимкам: {len(_caps)}, сверено глазами "
-                f"{len(_caps) - len(_no_eyes)}; файлов в data/scans: {len(SCAN_STEMS)}. "
+    CAP_STAT = (f"Реестр листов: {len(_caps)} записей, сверено глазами "
+                f"{len(_caps) - len(_no_eyes)}, разобрано по людям {_resolved}; "
+                f"файлов в data/scans: {len(SCAN_STEMS)}. "
                 f"Остаток — caption_worklist.py list")
 else:
-    CAP_STAT = "Подписей к снимкам: файла scan_captions.yaml нет"
+    CAP_STAT = "Реестр листов: файла folios.yaml нет"
 
-# --- сканы: связь с источником ВЫЧИСЛЯЕТСЯ, а не хранится -------------------
-# Имя файла обязано быть `d<дело>_sk<скан>[_что_на_нём].jpg`, и этого достаточно:
-# то же дело и тот же скан стоят в `archive_ref` источника. Заводить поле `scan`
-# не нужно — оно было бы производным, набранным руками, а такие ржавеют.
+# --- сканы: доезжает ли лист до человека ------------------------------------
+# 🔴 ПРЕЖНЯЯ ПРОВЕРКА СПРАШИВАЛА НЕ ТО. Она искала скан, «не отвечающий ни одному
+# источнику», и показывала три штуки — при том что до карточки человека не
+# доезжали двадцать пять. Разница в том, что источник бывает с пустым
+# `people_mentioned` (отрицательный результат, опись, прочёс): скан к нему
+# привязан, а человека за ним нет, и на страницу лист не попадает никогда.
+# ⇒ Спрашивать надо про ЧЕЛОВЕКА, а не про источник.
 #
-# ⚠️ Один скан законно принадлежит НЕСКОЛЬКИМ источникам: скан — это разворот,
-# а на развороте бывает пять рождений и две восприемницы (правило 15 («строка
-# указателя относится к развороту»)). Обратное тоже верно: сплошной прочёс — один
-# источник на десятки разворотов.
-SCAN_DIR = BASE / "data" / "scans" / "originals"
-_scan_pat = re.compile(r"^d(\d{1,4})_sk(\d{1,4})(?:_[a-z0-9_]+)?$", re.I)
-if SCAN_DIR.is_dir():
-    # 🔴 Шифр перечисляет сканы, а не повторяет дело перед каждым: «д.243 ск.13,
-    # ск.196, ск.202» — один поход в архив, три разворота. Прежняя версия искала
-    # пару «д.NNN … ск.NNN» одной регуляркой и потому видела ТОЛЬКО ПЕРВЫЙ скан
-    # каждого дела, а остальные объявляла сиротами. Измерено 2026-08-05: восемь
-    # ложных сирот из двадцати девяти, и все — продолжения перечислений.
-    # Поэтому шифр читается слева направо с памятью о текущем деле: «д.NNN»
-    # запоминается, каждое следующее «ск.NNN» относится к нему. Память сбрасывает
-    # «ф.» — новый фонд означает новый шифр, и висящий номер дела к нему не тянется.
-    # ⚠️ ДОРАБОТАНО 2026-08-05, И СНОВА ПО ИЗМЕРЕНИЮ: шесть ложных сирот из восьми.
-    # Первая версия ловила только форму «ск.13, ск.196» — с повтором слова. Но шифры
-    # пишут ещё двумя способами, и оба живые:
-    #   «сканы 405, 522 и 523»  — слово во МНОЖЕСТВЕННОМ числе, дальше голый перечень;
-    #   «ск. 76, 148, 164, 206» — слово один раз, дальше голые номера через запятую.
-    # Поэтому «ск/скан/сканы» открывает ПЕРЕЧЕНЬ, и он тянется, пока идут числа,
-    # разделённые запятой, союзом «и» или повтором слова. Обрывает перечень любой
-    # другой текст — и, разумеется, «ф.» и «д.», у которых свой смысл.
-    _ref_tok = re.compile(
-        r"(ф\.)"                                    # 1: новый фонд — память сбросить
-        r"|д\.?\s?(\d{2,4})\b"                      # 2: дело
-        r"|ск(?:аны|анов|ана|ан|\.)?\s*"             # 3: перечень сканов
-        r"(\d{1,4}(?:\s*(?:,|и|;|ск(?:ан)?\.?)\s*\d{1,4})*)\b",
-        re.I)
-    _ref_pairs = defaultdict(list)
-    for s in sources["sources"]:
-        _cur_delo = None
-        for _m in _ref_tok.finditer(str(s.get("archive_ref", ""))):
-            if _m.group(1):
-                _cur_delo = None
-            elif _m.group(2):
-                _cur_delo = int(_m.group(2))
-            elif _cur_delo is not None:
-                for _n in re.findall(r"\d{1,4}", _m.group(3)):
-                    _ref_pairs[(_cur_delo, int(_n))].append(s["id"])
-    _bad_name, _orphan_scan = [], []
-    for f in sorted(SCAN_DIR.iterdir()):
-        if f.suffix.lower() not in (".jpg", ".jpeg", ".png"):
-            continue
-        m = _scan_pat.match(f.stem)
-        if not m:
-            _bad_name.append(f.name)
-            continue
-        if not _ref_pairs.get((int(m.group(1)), int(m.group(2)))):
-            _orphan_scan.append(f.name)
-    if _bad_name:
-        errors.append("сканы с именем не по соглашению d<дело>_sk<скан>[_описание]: "
-                      + ", ".join(_bad_name) + " — по такому имени скан не связать с источником")
-    if _orphan_scan:
-        warnings.append(f"сканов, не отвечающих ни одному источнику: {len(_orphan_scan)} — "
-                        + ", ".join(_orphan_scan)
-                        + ". Скачаны, но документом в проекте не стали")
+# ⚠️ И считать надо по data/scans целиком, а не по одному подкаталогу: сборщик
+# страницы читает несколько каталогов, а прежняя проверка смотрела только
+# в originals/ и потому не видела ни семейных снимков, ни надгробий.
+# ⚠️ Координата в имени обязательна только в `originals/` — это развороты архивных
+# дел, и связать их с делом больше нечем. У надгробия, семейной фотографии, донесения
+# ЦАМО и листа описи координаты «дело+скан» нет и быть не может; их дом — соседние
+# подкаталоги, а связь с человеком идёт через реестр листов, как у всех остальных.
+_bad_name = []
+for _stem, _f in FOLIO_DISK.items():
+    if _f.parent.name != "originals":
+        continue
+    if not re.match(r"^d(\d{1,4})_sk(\d{1,4})(?:_[a-z0-9_]+)?$", _stem, re.I):
+        _bad_name.append(_f.name)
+if _bad_name:
+    errors.append("в data/scans/originals имя не по соглашению d<дело>_sk<скан>[_описание]: "
+                  + ", ".join(sorted(_bad_name))
+                  + " — по такому имени лист не связать с делом")
+
+_unregistered = sorted(set(FOLIO_HAVE) - set(_caps if CAP_FILE.is_file() else {}))
+if _unregistered:
+    warnings.append(f"снимков без записи в реестре листов: {len(_unregistered)} — "
+                    + ", ".join(_unregistered[:6])
+                    + ". Собраны для страницы, но что на них — нигде не сказано")
+if FOLIO_UNREACHABLE:
+    warnings.append(f"🔴 ЛИСТ НИКОМУ НЕ ПОКАЗЫВАЕТСЯ ({len(FOLIO_UNREACHABLE)}): снимок собран, "
+                    f"а на карточку человека не попадает — реестр не называет на нём никого, "
+                    f"и источник у него не однолистовой. "
+                    + ", ".join(FOLIO_UNREACHABLE[:6]))
+if FOLIO_WIDE:
+    warnings.append(f"источников-сводов, разбирающих больше одного листа: {len(FOLIO_WIDE)} — "
+                    f"снимки через них не привязываются (угадывать, чей лист, нельзя — "
+                    f"правило 1). Долг снимается разбором листов в folios.yaml")
 
 for h in hyps["hypotheses"]:
     if h.get("status") not in (hyps.get("meta", {}).get("statuses")

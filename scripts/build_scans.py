@@ -50,7 +50,16 @@ def find_project(start=None):
 
 
 BASE = find_project()
-SRC_DIRS = [BASE / 'data' / 'scans' / 'originals', BASE / 'data' / 'scans' / 'family']
+# 🔴 КАТАЛОГИ БОЛЬШЕ НЕ ПЕРЕЧИСЛЯЮТСЯ ПОИМЁННО, и это исправление от 2026-08-09.
+# Здесь стоял список из двух — `originals` и `family`, — а изображения тем временем
+# завелись ещё в двух местах: `data/photos/` (четыре надгробия, названные в шифрах
+# четырёх источников) и корень `data/scans/`. Ни те, ни другие на страницу не
+# попадали ВООБЩЕ, и заметить это было нечем: сборщик молчит о том, чего не читал.
+# ⇒ Читается всё дерево `data/scans/`. Новый подкаталог работает сам, без правки кода.
+# ⚠️ Значит и обратное: устаревшие копии в `data/scans/` держать нельзя — они соберутся.
+# Пятнадцать таких (загрузки по 800 px, вытесненные оригиналами в 3600—5000 px)
+# убраны в `archive/scans_800px_legacy/`.
+SRC_ROOT = BASE / 'data' / 'scans'
 OUT = BASE / 'web' / 'scans'
 
 _MAGICK = shutil.which('magick') or shutil.which('convert')
@@ -77,30 +86,36 @@ def main() -> None:
     force = '--force' in sys.argv
     made = skipped = 0
     total_in = total_out = 0
-    for d in SRC_DIRS:
-        if not d.is_dir():
-            continue
-        for f in sorted(d.iterdir()):
-            if f.suffix.lower() not in EXTS:
-                continue
-            name = f.stem + '.jpg'
-            view = OUT / 'view' / name
-            thumb = OUT / 'thumb' / name
-            total_in += f.stat().st_size
-            fresh = (view.exists() and thumb.exists()
-                     and view.stat().st_mtime >= f.stat().st_mtime)
-            if fresh and not force:
-                skipped += 1
-            else:
-                resize(f, view, VIEW_PX, QUALITY_VIEW)
-                resize(f, thumb, THUMB_PX, QUALITY_THUMB)
-                made += 1
-            total_out += view.stat().st_size + thumb.stat().st_size
+    srcs = sorted(f for f in SRC_ROOT.rglob('*') if f.suffix.lower() in EXTS) \
+        if SRC_ROOT.is_dir() else []
+    # ⚠️ Стем — ключ на всём пути от исходника до подписи в реестре листов, поэтому
+    # два файла с одинаковым именем в разных подкаталогах затирали бы друг друга молча.
+    by_stem = {}
+    for f in srcs:
+        by_stem.setdefault(f.stem, []).append(f)
+    clash = {k: v for k, v in by_stem.items() if len(v) > 1}
+    if clash:
+        raise SystemExit('одно имя в двух каталогах — реестр листов не сможет их различить:\n'
+                         + '\n'.join(f'  {k}: ' + ', '.join(str(p.relative_to(BASE)) for p in v)
+                                     for k, v in sorted(clash.items())))
+    for f in srcs:
+        name = f.stem + '.jpg'
+        view = OUT / 'view' / name
+        thumb = OUT / 'thumb' / name
+        total_in += f.stat().st_size
+        fresh = (view.exists() and thumb.exists()
+                 and view.stat().st_mtime >= f.stat().st_mtime)
+        if fresh and not force:
+            skipped += 1
+        else:
+            resize(f, view, VIEW_PX, QUALITY_VIEW)
+            resize(f, thumb, THUMB_PX, QUALITY_THUMB)
+            made += 1
+        total_out += view.stat().st_size + thumb.stat().st_size
 
     # ⚠️ Файлы, которых в исходниках уже нет, удаляем: иначе страница будет ссылаться
     # на изображение, которого в проекте не осталось, и это заметят не скоро.
-    have = {f.stem + '.jpg' for d in SRC_DIRS if d.is_dir()
-            for f in d.iterdir() if f.suffix.lower() in EXTS}
+    have = {f.stem + '.jpg' for f in srcs}
     dropped = 0
     for sub in ('view', 'thumb'):
         p = OUT / sub
