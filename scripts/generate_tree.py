@@ -2251,7 +2251,7 @@ __JS__
 meta = graph.get('meta', {})
 people = graph['people']
 rels = graph.get('relationships', [])
-title = meta.get('title', 'Генеалогическое древо семьи Савченко')
+title = meta.get('title', 'Генеалогическое древо')
 gen_levels = len({p['generation'] for p in people})
 stubs = sum(1 for p in people if p.get('stub'))
 hidden = sum(1 for p in people if p.get('visible') is False)

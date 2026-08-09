@@ -55,7 +55,7 @@ python ~/.claude/skills/genealogy-research/scripts/generate_tree.py
 
 ```sh
 python ~/.claude/skills/genealogy-research/scripts/init_project.py . \
-       --root "Фамилия Имя Отчество" --birth 1985-07-05
+       --root "Фамилия Имя Отчество" --birth 1970-01-01
 ```
 
 Она создаёт пять файлов данных, каталоги для копий и сканов, заводит субъекта

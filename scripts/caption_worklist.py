@@ -26,15 +26,18 @@
     caption_worklist.py list [СКОЛЬКО]     что разобрать дальше, с контекстом
     caption_worklist.py halves ИМЯ ...     нарезать половины разворотов
     caption_worklist.py sheet ДЕЛО:СКАН    черновик из машинной расшифровки
-    caption_worklist.py add < file.json    дописать записи реестра (JSON на stdin)
+    caption_worklist.py add < file.json    ЗАВЕСТИ записи реестра (JSON на stdin)
+    caption_worklist.py people < file.json ДОПИСАТЬ `people` уже подписанным листам
 
 Формат JSON для add:
     {"стем_файла": {"case": "...", "records": [1, 2], "text": "...",
                     "people": [{"id": "yakim_chemodanov", "as": "subject",
                                 "record": 184}],
                     "sources": ["src_053"]}}
-Роли `as` — folios.ROLES: subject · deceased · parent · spouse ·
-godparent · witness · mentioned.
+Формат JSON для people:
+    {"стем_файла": [{"id": "…", "as": "subject", "record": 184}], "другой": []}
+Роли `as` — folios.ROLES: subject · deceased · depicted · parent · spouse ·
+godparent · witness · mentioned. Пустой список — «смотрели, наших нет».
 Поле eyes проставляется само сегодняшней датой — команда вызывается
 ТОЛЬКО после того, как снимок открыт и прочитан глазами.
 """
@@ -267,8 +270,70 @@ def cmd_add(_):
     print(f"добавлено {len(added)}, всего записей в реестре {len(reg)}")
 
 
+def _people_lines(people):
+    """Строки блока `people` — ключ пишется даже для пустого списка."""
+    if not people:
+        return ["    people: []"]
+    out = ["    people:"]
+    for item in people:
+        bits = [f"id: {item['id']}", f"as: {item.get('as', 'mentioned')}"]
+        if item.get("record") is not None:
+            bits.append(f"record: {item['record']}")
+        out.append("    - {" + ", ".join(bits) + "}")
+    return out
+
+
+def cmd_people(_):
+    """Дописать `people` листам, У КОТОРЫХ УЖЕ ЕСТЬ ПОДПИСЬ. JSON на stdin.
+
+    {"d612_sk287_yakim_birth": [{"id": "yakim_chemodanov", "as": "subject",
+                                 "record": 184}], "f306_op1_opis_Im1_titul": []}
+
+    🔴 БЕЗ ЭТОЙ КОМАНДЫ ОСНОВНАЯ РАБОТА НЕВЫПОЛНИМА, и это выяснилось проверкой
+    на устойчивость к сбросу контекста, а не на живом заходе. `add` умеет только
+    ЗАВОДИТЬ запись и молча пропускает уже существующую — а подписи к полутора
+    сотням листов написаны раньше, чем появилось поле `people`. То есть очередь
+    показывала работу, которую нечем было сделать.
+
+    ⚠️ Пустой список — законное значение: «смотрели, наших на листе нет».
+    ⚠️ `eyes` переставляется на сегодня: разбор по людям — такое же чтение
+    снимка глазами, как и подпись, и дата должна означать последнее из них.
+    """
+    data = json.load(sys.stdin)
+    eyes = datetime.date.today().isoformat()
+    text = CAPS.read_text(encoding="utf-8")
+    done, missing = [], []
+    for stem, people in data.items():
+        head = f"\n  {stem}:\n"
+        if head not in text:
+            missing.append(stem)
+            continue
+        start = text.index(head) + 1
+        # конец записи — следующий ключ того же уровня либо конец файла
+        nxt = re.search(r"\n  [^\s#][^\n]*:\n", text[start + len(head):])
+        end = start + len(head) - 1 + (nxt.start() + 1 if nxt else len(text) - start - len(head) + 1)
+        block = text[start:end]
+        # снять прежний блок people, если он был
+        block = re.sub(r"\n    people:(?:\s*\[\])?(?:\n    - \{[^\n]*\})*", "", block)
+        block = re.sub(r"\n    eyes: '[^']*'", "", block)
+        lines = block.rstrip("\n").split("\n")
+        body = [lines[0], f"    eyes: '{eyes}'"] + _people_lines(people)
+        rest = lines[1:]
+        # people ставим ПЕРЕД text, чтобы блочный скаляр остался последним
+        cut = next((i for i, l in enumerate(rest) if l.startswith("    text:")), len(rest))
+        text = text[:start] + "\n".join(body + rest[:cut] + rest[cut:]) + "\n" + text[end:]
+        done.append(stem)
+    CAPS.write_text(text, encoding="utf-8")
+    reg = (yaml.safe_load(CAPS.read_text(encoding="utf-8")) or {}).get("folios") or {}
+    if missing:
+        print(f"  ⚠️ записи нет, нужен add: {', '.join(missing)}")
+    print(f"разобрано по людям {len(done)}; всего в реестре {len(reg)}, "
+          f"с разбором {sum(1 for v in reg.values() if isinstance(v.get('people'), list))}")
+
+
 if __name__ == "__main__":
-    cmds = {"list": cmd_list, "halves": cmd_halves, "sheet": cmd_sheet, "add": cmd_add}
+    cmds = {"list": cmd_list, "halves": cmd_halves, "sheet": cmd_sheet,
+            "add": cmd_add, "people": cmd_people}
     if len(sys.argv) < 2 or sys.argv[1] not in cmds:
         raise SystemExit(__doc__)
     cmds[sys.argv[1]](sys.argv[2:])

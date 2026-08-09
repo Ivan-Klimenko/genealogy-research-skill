@@ -895,14 +895,6 @@ if CAP_FILE.is_file():
         mk = DATA / ".yandex_markup" / f"d{int(m.group(1))}" / f"sk{int(m.group(2)):03d}.txt"
         return mk.read_text(encoding="utf-8") if mk.is_file() else None
 
-    def _fold(t):
-        """Дореформенное письмо к нынешнему — иначе «Ѳеодоръ» не найдётся никогда."""
-        t = t.lower()
-        for a, b in (("ѣ", "е"), ("і", "и"), ("ъ", ""), ("ь", ""), ("ѳ", "ф"),
-                     ("ѵ", "и"), ("ё", "е")):
-            t = t.replace(a, b)
-        return t
-
     for stem, cap in _caps.items():
         if not isinstance(cap, dict):
             errors.append(f"folios[{stem}]: должен быть словарём с полем text")
@@ -948,9 +940,11 @@ if CAP_FILE.is_file():
             if markup is not None:
                 # ⚠️ Ищем ИМЯ, не отчество и не фамилию: отчество ложный различитель
                 # (правило 3), а фамилий в дореформенной метрике часто нет вовсе.
-                given = _fold((by_id[pid].get("name_ru") or "").split()[:1] and
-                              (by_id[pid]["name_ru"].split()[0]) or "")[:4]
-                if given and given not in _fold(markup):
+                # Корни считает folios.name_roots — он знает правило 5 («Іоакимъ»
+                # это «Яким»), без чего проверка ругалась бы на верные привязки.
+                roots = folio_lib.name_roots(by_id[pid].get("name_ru"))
+                low = folio_lib.fold(markup)
+                if roots and not any(r in low for r in roots):
                     warnings.append(f"folios[{stem}]: {pid} назван на листе, но имени "
                                     f"«{by_id[pid]['name_ru'].split()[0]}» нет "
                                     f"в расшифровке разворота — проверить глазами")
@@ -2339,7 +2333,6 @@ def write_status():
         f"**{len(no_move)}** из {open_n}"
         + (f" — {', '.join(no_move[:25])}{'…' if len(no_move) > 25 else ''}"
            if no_move else " — чисто"))
-    _sc = [w for w in warnings if w.startswith("сканов, не отвечающих")]
     _mem_only = [r["id"] for r in rels if r["confidence"] == "confirmed"
                  and not any(e.get("role") in ("joint_mention", "direct_knowledge")
                              for e in (r.get("evidence") or []))]
@@ -2358,9 +2351,20 @@ def write_status():
            if _byp else " — чисто"))
     add(f"- Подтверждённых связей, стоящих только на семейной памяти: **{len(_mem_only)}**"
         + (f" — {', '.join(_mem_only)}. Документа нет ни одного" if _mem_only else " — чисто"))
-    add(f"- Сканов, скачанных, но не ставших документом: "
-        f"**{_sc[0].split(': ')[1].split(' —')[0] if _sc else '0'}**"
-        + ("" if _sc else " — чисто"))
+    # 🔴 ЗДЕСЬ БЫЛА МЁРТВАЯ СТРОКА, снята 2026-08-09. Она вылавливала число
+    # из ТЕКСТА предупреждения «сканов, не отвечающих ни одному источнику»;
+    # предупреждение переписали, и витрина стала печатать ноль — молча и всегда.
+    # ⚠️ Урок ровно тот же, что у остальных счётчиков: производное считают
+    # из ДАННЫХ, а не из чужой строки.
+    add(f"- Листов, не разобранных по людям: **{len(_folio_debt['unresolved'])}** "
+        f"из {len(FOLIO_HAVE)} — снимок доходит до человека только через реестр "
+        f"(`caption_worklist.py list`)")
+    add(f"- Листов, не попадающих ни на одну карточку: "
+        f"**{len(FOLIO_UNREACHABLE)}**"
+        + ("" if FOLIO_UNREACHABLE else " — чисто"))
+    add(f"- Источников-сводов, через которые снимки не привязываются: "
+        f"**{len(FOLIO_WIDE)}**"
+        + ("" if FOLIO_WIDE else " — чисто"))
     add(f"- Людей без единого источника: "
         f"**{sum(1 for p in people if not p.get('sources'))}**")
     add(f"- Предупреждений валидатора: **{len(warnings)}**")

@@ -74,7 +74,7 @@ metadata:
 **Шаг 1. Завести схему.** Одна команда, ничего из лежащего в каталоге она не трогает:
 
 ```sh
-python <skill>/scripts/init_project.py . --root "Фамилия Имя Отчество" --birth 1985-07-05
+python <skill>/scripts/init_project.py . --root "Фамилия Имя Отчество" --birth 1970-01-01
 ```
 
 Создаёт пять файлов данных, каталоги `raw_records/`, `scans/`, `handoff/`, дневник
