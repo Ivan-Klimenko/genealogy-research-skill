@@ -932,6 +932,21 @@ if CAP_FILE.is_file():
             if role is not None and role not in FOLIO_ROLES:
                 errors.append(f"folios[{stem}]: неизвестная роль as={role!r} у {pid} "
                               f"(можно: {', '.join(sorted(FOLIO_ROLES))})")
+            # ⭐ Отождествление: лист называет имя, а что это НАШ человек — говорим МЫ.
+            # Молча этого делать нельзя (правило 1), поэтому `hyp` обязана
+            # существовать и не быть отклонённой, а `as_written` показывает,
+            # как человек назван на самом листе.
+            if item.get("hyp"):
+                if item["hyp"] not in hids:
+                    errors.append(f"folios[{stem}]: {pid} hyp -> несуществующая {item['hyp']}")
+                elif _hyp_status.get(item["hyp"]) == "rejected":
+                    errors.append(f"folios[{stem}]: {pid} опознан по ОТКЛОНЁННОЙ "
+                                  f"гипотезе {item['hyp']} — привязку снять или "
+                                  f"назвать другую опору")
+            if item.get("as_written") and not item.get("hyp"):
+                warnings.append(f"folios[{stem}]: {pid} назван на листе иначе "
+                                f"(«{item['as_written']}»), а на чём держится "
+                                f"отождествление — не сказано")
             if item.get("record") is not None and markup is not None:
                 on_sheet = {int(x) for x in re.findall(r"(?<![\d])(\d{1,4})(?![\d])", markup)}
                 if int(item["record"]) not in on_sheet:

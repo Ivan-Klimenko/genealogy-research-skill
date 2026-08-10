@@ -279,6 +279,10 @@ def _people_lines(people):
         bits = [f"id: {item['id']}", f"as: {item.get('as', 'mentioned')}"]
         if item.get("record") is not None:
             bits.append(f"record: {item['record']}")
+        if item.get("as_written"):
+            bits.append(f"as_written: \"{item['as_written']}\"")
+        if item.get("hyp"):
+            bits.append(f"hyp: {item['hyp']}")
         out.append("    - {" + ", ".join(bits) + "}")
     return out
 

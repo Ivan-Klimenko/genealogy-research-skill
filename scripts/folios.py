@@ -123,13 +123,34 @@ def load_folios(data_dir):
 
 
 def folio_people(folio):
-    """[(person_id, role, record)] — кто назван НА ЭТОМ листе."""
+    """[{id, as, record, as_written, hyp}] — кто назван НА ЭТОМ листе.
+
+    ⭐ ДВА ПОЛЯ ПРО ОТОЖДЕСТВЛЕНИЕ, заведены 2026-08-10, и они про разное.
+
+    `as_written` — КАК ЧЕЛОВЕК НАЗВАН НА САМОМ ЛИСТЕ, дословно. Заполняется,
+    когда написание расходится с именем в графе. Это та же дисциплина, что
+    у дословной копии против пересказа: рядом с нашим утверждением стоят слова
+    документа, и читателю видно, что лист говорит иначе.
+
+    `hyp` — НА ЧЁМ ДЕРЖИТСЯ ОТОЖДЕСТВЛЕНИЕ. 🔴 Лист называет имя, а что это ИМЕННО
+    НАШ человек — говорим МЫ, и говорить это молча нельзя. Живой случай: восприемник
+    записан «Романъ Васильевъ Новоселовъ», а в графе он «Роман Андреев Сундуков»
+    — третье написание отчества у одного человека. Опора есть (hyp_095 подтверждена),
+    но без ссылки на неё привязка выглядела бы как совпадение имени, то есть как
+    ровно то, что запрещает правило 1.
+    ⚠️ Поле обязательно там, где `as_written` расходится с именем узла; валидатор
+    проверяет, что гипотеза существует и не отклонена.
+    """
     out = []
     for item in (folio.get("people") or []):
         if not isinstance(item, dict) or not item.get("id"):
             continue
         role = str(item.get("as") or "mentioned")
-        out.append((item["id"], role if role in ROLES else "mentioned", item.get("record")))
+        out.append({"id": item["id"],
+                    "as": role if role in ROLES else "mentioned",
+                    "record": item.get("record"),
+                    "as_written": str(item.get("as_written") or "").strip() or None,
+                    "hyp": str(item.get("hyp") or "").strip() or None})
     return out
 
 
@@ -348,12 +369,13 @@ def attach(graph, sources_doc, folios, have, project=None):
     out = {pid: [] for pid in people}
     seen = {pid: set() for pid in people}
 
-    def put(pid, stem, role, record, srcs, basis):
+    def put(pid, stem, role, record, srcs, basis, as_written=None, hyp=None):
         if pid not in out or stem in seen[pid]:
             return
         seen[pid].add(stem)
         out[pid].append({"file": have[stem], "stem": stem, "role": role,
-                         "record": record, "srcs": sorted(srcs), "basis": basis})
+                         "record": record, "srcs": sorted(srcs), "basis": basis,
+                         "as_written": as_written, "hyp": hyp})
 
     # какие источники разбирают какой лист — нужно и для подписи, и для перехода
     src_of = {}
@@ -370,9 +392,10 @@ def attach(graph, sources_doc, folios, have, project=None):
         if stem not in have or not folio_resolved(folio):
             continue
         resolved.add(stem)
-        for pid, role, record in folio_people(folio):
-            put(pid, stem, role, record, src_of.get(stem, set()) | set(folio.get("sources") or []),
-                "folio")
+        for item in folio_people(folio):
+            put(item["id"], stem, item["as"], item["record"],
+                src_of.get(stem, set()) | set(folio.get("sources") or []),
+                "folio", item["as_written"], item["hyp"])
 
     # ② переход — только однолистовые источники и только для неразобранных листов
     ment = {}

@@ -102,8 +102,7 @@ def load_folio_registry():
             'text': str(c.get('text') or '').strip(),
             'case': str(c.get('case') or '').strip(),
             'eyes': str(c.get('eyes') or '').strip(),
-            'people': [{'id': pid, 'as': role, 'record': rec}
-                       for pid, role, rec in folio_lib.folio_people(c)],
+            'people': folio_lib.folio_people(c),
         }
     return out
 
@@ -602,6 +601,10 @@ details.fold.why .fold-body { font-size: 12.5px; color: var(--muted); padding-bo
 /* «С ним на листе» — не украшение: правило 15 говорит, что на развороте бывает
    пять записей, и если лист попал не туда, это должно быть видно с карточки. */
 .shot-who { font-size: 11px; color: var(--muted); line-height: 1.2; }
+/* 🔴 Человек назван на листе ИНАЧЕ, чем в графе, — это наше отождествление,
+   и прятать его нельзя: читатель должен видеть слова документа рядом с нашим
+   утверждением и ссылку на то, чем утверждение держится. */
+.shot-ident { font-size: 11px; color: var(--warn); line-height: 1.2; }
 
 /* ---------- просмотр снимка во весь экран ---------- */
 /* 🔴 ПОДПИСЬ — ПОЛОСА ПОД СНИМКОМ, А НЕ ПЛАШКА ПОВЕРХ НЕГО. Раньше она висела
@@ -1645,6 +1648,8 @@ function shotsHTML(pid) {
             <img loading="lazy" src="scans/thumb/${esc(s.file)}" alt="${esc(s.stem)}">
           </button>
           ${s.record ? `<figcaption class="shot-rec">запись № ${esc(String(s.record))}</figcaption>` : ''}
+          ${s.as_written ? `<figcaption class="shot-ident">на листе: «${esc(s.as_written)}»${
+              s.hyp ? ` · опознан по ${esc(s.hyp)}` : ''}</figcaption>` : ''}
           ${who ? `<figcaption class="shot-who">с ним на листе: ${esc(who)}</figcaption>` : ''}
         </figure>`;
       }).join('')}</div>
