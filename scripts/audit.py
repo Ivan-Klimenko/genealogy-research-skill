@@ -46,7 +46,14 @@ D = B / 'data'
 G = yaml.safe_load((D / 'family_graph.yaml').read_text(encoding='utf-8'))
 S = {s['id']: s for s in yaml.safe_load((D / 'sources.yaml').read_text(encoding='utf-8'))['sources']}
 H = {h['id']: h for h in yaml.safe_load((D / 'hypotheses.yaml').read_text(encoding='utf-8'))['hypotheses']}
-Q = yaml.safe_load((D / 'research_queue.yaml').read_text(encoding='utf-8'))['queue']
+_Q = yaml.safe_load((D / 'research_queue.yaml').read_text(encoding='utf-8')) or {}
+# ⚠️ Ключ очереди у проектов РАЗНЫЙ: `queue` в проекте, из которого вырос навык,
+# и `tasks` у всякого, заведённого `init_project.py`. Валидатор давно читает оба,
+# аудит читал только первый и падал на любом новом проекте с KeyError — то есть
+# на проекте, созданном ЭТИМ ЖЕ навыком. Найдено прогоном на пустом проекте
+# 2026-08-12; сам по себе такой отказ не всплывает, потому что в родном проекте
+# ключ правильный, а новых проектов до сих пор не заводили.
+Q = _Q.get('queue', _Q.get('tasks', []))
 P = {p['id']: p for p in G['people']}
 R = {r['id']: r for r in G['relationships']}
 DETACHED = set(G['meta'].get('detached_branches') or {})

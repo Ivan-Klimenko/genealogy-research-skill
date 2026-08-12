@@ -236,6 +236,20 @@ with tempfile.TemporaryDirectory() as tmp:
     check("свежий проект валиден сразу", "ОШИБОК НЕТ" in r.stdout, r.stdout[-400:])
     r = run("generate_tree.py", d)
     check("древо из одного человека рисуется", r.returncode == 0, (r.stdout + r.stderr)[-200:])
+    # 🔴 И ОСТАЛЬНОЙ ЦИКЛ ТОЖЕ, а не два скрипта из семи. Проверка стояла на
+    # validate + generate_tree, и в эту щель провалился `audit.py`: он читал
+    # очередь по ключу `queue` (так она названа в проекте, из которого вырос
+    # навык), а `init_project.py` пишет `tasks` — то есть аудит падал с KeyError
+    # на любом проекте, заведённом ЭТИМ ЖЕ навыком. Найдено прогоном 2026-08-12,
+    # не тестом: в родном проекте ключ правильный, а новых проектов не заводили.
+    # ⇒ Проверять надо КАЖДЫЙ скрипт цикла, иначе переносимость держится
+    # на том, что её никто не пробовал.
+    for _s, _args in (("cache_manifest.py", ()), ("case_structure.py", ()),
+                      ("build_scans.py", ()), ("audit.py", ()),
+                      ("caption_worklist.py", ("list",))):
+        _r = run(_s, d, *_args)
+        check(f"{_s} не падает на свежем проекте", _r.returncode == 0,
+              (_r.stdout + _r.stderr)[-300:])
     r = run("init_project.py", d, ".", "--root", "Иванов Пётр Сергеевич")
     check("повторный запуск не затирает проект", r.returncode != 0)
 
