@@ -257,10 +257,7 @@ def cmd_add(_):
             else:
                 out.append("    people:")
                 for item in c["people"]:
-                    bits = [f"id: {item['id']}", f"as: {item.get('as', 'mentioned')}"]
-                    if item.get("record") is not None:
-                        bits.append(f"record: {item['record']}")
-                    out.append("    - {" + ", ".join(bits) + "}")
+                    out += _people_lines([item])[1:]
         if c.get("sources"):
             out.append("    sources: [" + ", ".join(c["sources"]) + "]")
         out.append("    text: |-")
@@ -276,7 +273,15 @@ def cmd_add(_):
 
 
 def _people_lines(people):
-    """Строки блока `people` — ключ пишется даже для пустого списка."""
+    """Строки блока `people` — ключ пишется даже для пустого списка.
+
+    🔴 ОДИН СЕРИАЛИЗАТОР НА ОБЕ КОМАНДЫ, И ЭТО ИСПРАВЛЕНИЕ ОТ 2026-08-12.
+    Их было два — свой у `add`, свой у `people`, — и они разошлись ровно так,
+    как расходится всякая копия правила: `add` писал только id, роль и номер
+    записи, молча теряя `of`, `as_written` и `hyp`. Заметилось это не чтением
+    кода, а предупреждением валидатора о заведённом тем же днём листе.
+    Та же болезнь, что дала три копии правил привязки снимка.
+    """
     if not people:
         return ["    people: []"]
     out = ["    people:"]
@@ -284,10 +289,14 @@ def _people_lines(people):
         bits = [f"id: {item['id']}", f"as: {item.get('as', 'mentioned')}"]
         if item.get("record") is not None:
             bits.append(f"record: {item['record']}")
+        if item.get("of"):
+            bits.append(f"of: {item['of']}")
         if item.get("as_written"):
             bits.append(f"as_written: \"{item['as_written']}\"")
         if item.get("hyp"):
             bits.append(f"hyp: {item['hyp']}")
+        if item.get("disputed"):
+            bits.append(f"disputed: {item['disputed']}")
         out.append("    - {" + ", ".join(bits) + "}")
     return out
 
