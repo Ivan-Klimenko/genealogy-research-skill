@@ -30,7 +30,7 @@
     caption_worklist.py people < file.json ДОПИСАТЬ `people` уже подписанным листам
 
 Формат JSON для add:
-    {"стем_файла": {"case": "...", "records": [1, 2], "text": "...",
+    {"стем_файла": {"kind": "birth", "case": "...", "records": [1, 2], "text": "...",
                     "people": [{"id": "yakim_chemodanov", "as": "subject",
                                 "record": 184}],
                     "sources": ["src_053"]}}
@@ -221,7 +221,7 @@ def cmd_sheet(args):
 def cmd_add(_):
     """Дописать записи реестра. JSON на stdin, ключ — стем файла снимка.
 
-    {"d612_sk287_yakim_birth": {"case": "...", "records": [184, 170],
+    {"d612_sk287_yakim_birth": {"kind": "birth", "case": "...", "records": [184, 170],
                                 "text": "...",
                                 "people": [{"id": "yakim_chemodanov",
                                             "as": "subject", "record": 184}]}}
@@ -240,6 +240,11 @@ def cmd_add(_):
             print(f"  ⚠️ уже есть, пропускаю: {stem}")
             continue
         out = [f"  {stem}:", f"    eyes: '{eyes}'"]
+        # ⚠️ Вид записи — такое же наблюдение, как `people`, и вычислять его нельзя:
+        # проверено на 154 листах, устройство дела ошибается в делах с ломаным
+        # порядком книг, а таких половина (см. folios.kind_from_structure).
+        if c.get("kind"):
+            out.append(f"    kind: {c['kind']}")
         if c.get("case"):
             out.append(f"    case: {c['case']}")
         if c.get("records"):
