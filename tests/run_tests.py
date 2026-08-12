@@ -430,6 +430,36 @@ check("в записи о рождении неоднозначности нет
 _claim = folio_lib.claimed_kinship(folio_lib.record_groups(_disp)[3])
 check("объявленное расхождение доезжает до потребителя",
       _claim == [("grandfather", "baby", "parent", "hyp_001")], str(_claim))
+print("13. Правило 1 проверяется ПО ЛИСТУ, а не по находке")
+# 🔴 Главное правило этой работы — «названы вместе в одном документе» — до
+# 2026-08-12 машина не проверяла никак: основание указывает на источник,
+# а источник у нас НАХОДКА и бывает на дюжину разворотов. Реестр листов знает,
+# кто на каком развороте, и делает правило проверяемым.
+_named = {"sheet_a": {"father", "son"}, "sheet_b": {"father", "daughter"},
+          "sheet_c": {"father", "son"}}
+check("лист называет обоих — правило соблюдено",
+      folio_lib.joint_mention_status({"father", "son"}, ["sheet_a", "sheet_b"], _named)
+      == ("confirmed", "sheet_a"))
+check("ни один лист обоих не называет — это долг",
+      folio_lib.joint_mention_status({"father", "cousin"}, ["sheet_a"], _named)[0]
+      == "not_named")
+# ⚠️ Отсутствие снимка НЕ долг: у семейной памяти и донесений его нет и не будет,
+# а предупреждение, которое нельзя погасить, — фон.
+check("снимков нет вовсе — молчим, а не обвиняем",
+      folio_lib.joint_mention_status({"father", "son"}, [], _named) == ("no_scan", None))
+check("листов несколько — связь доказана, точность цитаты нет",
+      folio_lib.joint_mention_status({"father", "son"}, ["sheet_a", "sheet_c"], _named)
+      == ("ambiguous", None))
+# ⭐ Указанный руками лист сильнее вычисления: он и нужен там, где разбор шифра
+# теряет координату. Живой случай: значок ⚙️ внутри шифра сбрасывал память
+# парсера, и «скан 148» — тот самый разворот с доказательством — пропадал.
+check("указанный лист перекрывает вычисление",
+      folio_lib.joint_mention_status({"father", "son"}, ["sheet_b"], _named, "sheet_a")
+      == ("confirmed", "sheet_a"))
+check("указанный лист, не называющий обоих, — ошибка, а не молчание",
+      folio_lib.joint_mention_status({"father", "son"}, ["sheet_a"], _named, "sheet_b")[0]
+      == "not_named")
+
 check("родитель не становится родителем самому себе",
       folio_lib.claimed_kinship([
           {"id": "x", "as": "subject", "record": 1, "of": None, "disputed": None},

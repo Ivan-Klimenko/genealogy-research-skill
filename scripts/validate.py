@@ -1053,6 +1053,56 @@ if CAP_FILE.is_file():
     if _no_eyes:
         warnings.append(f"подписей к снимкам без отметки «сверено глазами»: {len(_no_eyes)} — "
                         f"{', '.join(sorted(_no_eyes)[:5])}")
+    # ------------------------------------------------------------------
+    # ПРАВИЛО 1, ПРОВЕРЯЕМОЕ МАШИНОЙ
+    #
+    # 🔴 «Названы вместе в одном документе» — главное правило этой работы,
+    # и до 2026-08-12 машина его не проверяла НИКАК. Основание указывает
+    # на `src`, а источник у нас не документ, а НАХОДКА: 66 источников
+    # разбирают больше одного разворота, самый крупный — четырнадцать.
+    # То есть правило проверялось на объекте, который документом не является.
+    # Реестр листов знает, кто на каком развороте, — и делает его проверяемым.
+    #
+    # ⚠️ Три исхода, и только один из них долг:
+    #   · снимка у источника нет вовсе — проверить нечем, молчим;
+    #   · лист называет обоих — правило соблюдено;
+    #   · снимки есть, а обоих не называет ни один — вот это и есть долг.
+    _named_on = {st: {i["id"] for i in folio_lib.folio_people(cap)}
+                 for st, cap in _caps.items() if folio_lib.folio_resolved(cap)}
+    _src_stems = {s["id"]: folio_lib.source_folios(s, FOLIO_HAVE, None, BASE)
+                  for s in sources["sources"]}
+    _jm_debt, _jm_ok, _jm_blind = [], 0, 0
+    for r in rels:
+        _ends = set((r.get("parent"), r.get("child")) if r.get("type") == "parent_child"
+                    else (r.get("person1"), r.get("person2")))
+        for e in (r.get("evidence") or []):
+            if not isinstance(e, dict) or e.get("role") != "joint_mention":
+                continue
+            _f = e.get("folio")
+            if _f:
+                if _f not in _caps:
+                    errors.append(f"relationship {r['id']}: evidence folio -> нет такого "
+                                  f"листа в реестре ({_f})")
+                    continue
+                if _f not in (_src_stems.get(e["src"]) or []):
+                    warnings.append(f"rel {r['id']}: основание {e['src']} указывает на лист "
+                                    f"{_f}, а этот источник его не разбирает")
+            _st, _which = folio_lib.joint_mention_status(
+                _ends, _src_stems.get(e["src"]) or [], _named_on, _f)
+            if _st == "no_scan":
+                _jm_blind += 1
+            elif _st == "not_named":
+                _jm_debt.append(f"{r['id']}←{e['src']}")
+            else:
+                _jm_ok += 1
+    if _jm_debt:
+        warnings.append(
+            f"🔴 «НАЗВАНЫ ВМЕСТЕ» НЕ ПОДТВЕРЖДЕНО ЛИСТОМ ({len(_jm_debt)}): у основания роль "
+            f"joint_mention, снимки у источника есть, а разворота, называющего ОБЕ стороны, "
+            f"среди них нет. Либо дополнить реестр, либо переставить основание на верный "
+            f"лист (`folio:`), либо понизить роль: " + ", ".join(_jm_debt[:8]))
+    JM_STAT = (f"Правило 1 по листам: подтверждено {_jm_ok}, не подтверждено "
+               f"{len(_jm_debt)}, проверить нечем {_jm_blind}")
     if _no_kind:
         warnings.append(f"листов без вида записи (`kind`): {len(_no_kind)} — "
                         f"{', '.join(sorted(_no_kind)[:5])}. Без него роль на листе "
@@ -1064,6 +1114,7 @@ if CAP_FILE.is_file():
                 f"Остаток — caption_worklist.py list")
 else:
     CAP_STAT = "Реестр листов: файла folios.yaml нет"
+    JM_STAT = "Правило 1 по листам: реестра нет, проверить нечем"
 
 # --- сканы: доезжает ли лист до человека ------------------------------------
 # 🔴 ПРЕЖНЯЯ ПРОВЕРКА СПРАШИВАЛА НЕ ТО. Она искала скан, «не отвечающий ни одному
@@ -1996,6 +2047,7 @@ print(f"Что хотим узнать: {wish_lines_total} пунктов у {pe
       f"без открытых вопросов {len(people) - people_with_wishes})")
 print(f"Фронтиров:  {len(frontiers)} — {', '.join(frontiers)}")
 print(CAP_STAT)
+print(JM_STAT)
 print(f"Источников: {len(sources['sources'])}  "
       f"+ {len(sources.get('planned_resources', []))} неиспользованных ресурсов")
 print(f"Из них с дословной копией в raw_records/: "
