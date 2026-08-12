@@ -509,13 +509,26 @@ def by_coord(have):
     return out
 
 
-def source_folios(source, have, coord=None, project=None):
+def source_folios(source, have, coord=None, project=None, folios=None):
     """[стем, ...] — какие листы разбирает этот источник.
 
-    Два входа, и оба однозначны:
-      ① координата из `archive_ref` ⇄ та же координата в имени файла;
-      ② путь `data/scans/...`, выписанный в дословной копии, — так подхватываются
+    Три входа, и они разного класса.
+
+    ⭐ ГЛАВНЫЙ — ① НАБЛЮДЕНИЕ: лист сам объявил источник в своём `sources`.
+    Это написано рукой после чтения снимка, а не выведено из прозы, и потому
+    сильнее двух остальных (принцип 5 навыка — «наблюдение сильнее записи»).
+
+    Дальше — два вывода, оба из текста:
+      ② координата из `archive_ref` ⇄ та же координата в имени файла;
+      ③ путь `data/scans/...`, выписанный в дословной копии, — так подхватываются
          семейные снимки и записи, у которых архивного шифра нет.
+
+    🔴 Почему ① пришлось завести. Разбор шифра ломается о прозу, и ломается молча:
+    у источника со словом «ЦЕЛИКОМ» и скобкой «(1909—1910, 486 разворотов)»
+    парсер не достал НИ ОДНОЙ координаты, при том что развороты в шифре
+    перечислены. Лист был разобран, обе стороны на нём названы, а правило 1
+    продолжало числить основание неподтверждённым. Чинить регуляркой значило
+    гоняться за прозой; наблюдение просто отвечает на тот же вопрос точнее.
     """
     coord = by_coord(have) if coord is None else coord
     found, seen = [], set()
@@ -525,6 +538,10 @@ def source_folios(source, have, coord=None, project=None):
             seen.add(stem)
             found.append(stem)
 
+    sid = source.get("id")
+    for stem, folio in (folios or {}).items():
+        if sid and isinstance(folio, dict) and sid in (folio.get("sources") or []):
+            add(stem)
     for pair in ref_folios(source.get("archive_ref")):
         for stem in coord.get(pair, []):
             add(stem)
@@ -602,7 +619,7 @@ def attach(graph, sources_doc, folios, have, project=None):
     src_of = {}
     folio_of_src = {}
     for s in sources_doc.get("sources") or []:
-        stems = source_folios(s, have, coord, project)
+        stems = source_folios(s, have, coord, project, folios)
         folio_of_src[s["id"]] = stems
         for stem in stems:
             src_of.setdefault(stem, set()).add(s["id"])
@@ -650,7 +667,7 @@ def debt(graph, sources_doc, folios, have, project=None):
     coord = by_coord(have)
     wide = {}
     for s in sources_doc.get("sources") or []:
-        stems = source_folios(s, have, coord, project)
+        stems = source_folios(s, have, coord, project, folios)
         if len(stems) > 1:
             wide[s["id"]] = stems
     return {

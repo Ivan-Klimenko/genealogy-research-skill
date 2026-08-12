@@ -107,7 +107,7 @@ def state():
     coord = folio_lib.by_coord(have)
     srcs_of = collections.defaultdict(set)
     for s in sources["sources"]:
-        for stem in folio_lib.source_folios(s, have, coord, BASE):
+        for stem in folio_lib.source_folios(s, have, coord, BASE, reg):
             srcs_of[stem].add(s["id"])
     # ⚠️ Цена листа — прямая линия, а не число карточек: карточек у листа сейчас
     # может не быть вовсе (он для того и в очереди), а вот назван ли на нём кто-то

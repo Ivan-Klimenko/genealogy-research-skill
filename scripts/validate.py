@@ -1086,7 +1086,7 @@ if CAP_FILE.is_file():
     #   · снимки есть, а обоих не называет ни один — вот это и есть долг.
     _named_on = {st: {i["id"] for i in folio_lib.folio_people(cap)}
                  for st, cap in _caps.items() if folio_lib.folio_resolved(cap)}
-    _src_stems = {s["id"]: folio_lib.source_folios(s, FOLIO_HAVE, None, BASE)
+    _src_stems = {s["id"]: folio_lib.source_folios(s, FOLIO_HAVE, None, BASE, _caps)
                   for s in sources["sources"]}
     _jm_debt, _jm_ok, _jm_blind = [], 0, 0
     for r in rels:

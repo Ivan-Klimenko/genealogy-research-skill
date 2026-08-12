@@ -2303,7 +2303,7 @@ _named_on = {st: {i["id"] for i in folio_lib.folio_people(c)}
              for st, c in _folios.items() if folio_lib.folio_resolved(c)}
 _mentions = {}
 for _s in sources.get("sources") or []:
-    _stems = folio_lib.source_folios(_s, _have, None, project_root)
+    _stems = folio_lib.source_folios(_s, _have, None, project_root, _folios)
     _speaks = bool(_stems) and all(st in _named_on for st in _stems)
     _on = set().union(*[_named_on[st] for st in _stems if st in _named_on]) or set() \
         if _stems else set()
