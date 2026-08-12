@@ -1119,6 +1119,25 @@ if CAP_FILE.is_file():
             f"лист (`folio:`), либо понизить роль: " + ", ".join(_jm_debt[:8]))
     JM_STAT = (f"Правило 1 по листам: подтверждено {_jm_ok}, не подтверждено "
                f"{len(_jm_debt)}, проверить нечем {_jm_blind}")
+    # ⚠️ `people_mentioned` против реестра — ЧИСЛОМ, А НЕ ПРЕДУПРЕЖДЕНИЕМ.
+    # Расхождение здесь чаще всего законно: поле значит «относится к находке»,
+    # а реестр — «назван на листе», и находка о рождении внука законно относится
+    # к бабушке, которой на листе нет. Сделать это предупреждением значит завести
+    # фон на сотню строк. ⇒ Витрине нужна величина, а не список.
+    # 🔴 Но одна цифра здесь всё же про ошибку: пока страница печатала
+    # «эти документы НАЗЫВАЮТ человека», для третьей группы это была неправда.
+    # Отрисовка исправлена 2026-08-12: реестр решает там, где может.
+    _pm = [0, 0, 0]
+    for _s in sources["sources"]:
+        _stems = _src_stems.get(_s["id"]) or []
+        _speaks = bool(_stems) and all(st in _named_on for st in _stems)
+        _on = set().union(*[_named_on[st] for st in _stems if st in _named_on]) \
+            if any(st in _named_on for st in _stems) else set()
+        for _pid in (_s.get("people_mentioned") or []):
+            _pm[0 if _pid in _on else (2 if _speaks else 1)] += 1
+    PM_STAT = (f"people_mentioned против реестра: подтверждено {_pm[0]}, "
+               f"реестр молчит {_pm[1]}, противоречит {_pm[2]} "
+               f"(последние на страницу не выводятся)")
     if _no_kind:
         warnings.append(f"листов без вида записи (`kind`): {len(_no_kind)} — "
                         f"{', '.join(sorted(_no_kind)[:5])}. Без него роль на листе "
@@ -1131,6 +1150,7 @@ if CAP_FILE.is_file():
 else:
     CAP_STAT = "Реестр листов: файла folios.yaml нет"
     JM_STAT = "Правило 1 по листам: реестра нет, проверить нечем"
+    PM_STAT = "people_mentioned против реестра: реестра нет"
 
 # --- сканы: доезжает ли лист до человека ------------------------------------
 # 🔴 ПРЕЖНЯЯ ПРОВЕРКА СПРАШИВАЛА НЕ ТО. Она искала скан, «не отвечающий ни одному
@@ -2064,6 +2084,7 @@ print(f"Что хотим узнать: {wish_lines_total} пунктов у {pe
 print(f"Фронтиров:  {len(frontiers)} — {', '.join(frontiers)}")
 print(CAP_STAT)
 print(JM_STAT)
+print(PM_STAT)
 print(f"Источников: {len(sources['sources'])}  "
       f"+ {len(sources.get('planned_resources', []))} неиспользованных ресурсов")
 print(f"Из них с дословной копией в raw_records/: "

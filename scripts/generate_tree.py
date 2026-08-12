@@ -859,13 +859,15 @@ for (const h of HYPS) {
    ровно то, от чего этот навык отговаривает. Поэтому карточка показывает два
    разных списка: `evidence` — чем доказано, `people_mentioned` — где упомянут.
    Смысл `evidence` при этом не размывается: роль там по-прежнему утверждение. */
-const mentionsByPerson = {};
-for (const s of SRC_LIST) {
-  for (const pid of (s.people_mentioned || [])) (mentionsByPerson[pid] ||= []).push(s);
-}
+/* ⚠️ Список считается ПРИ СБОРКЕ (MENTIONS), а не выводится здесь из
+   `people_mentioned`. Причина: реестр листов сильнее записи в источнике, и там,
+   где все листы источника разобраны, а человека на них нет, показывать документ
+   в разделе «называют его» — значит печатать неправду. Таких пар нашлось 116
+   из 1001. Правила отбора — в generate_tree.py, рядом с _mentions. */
 function mentionsOf(pid) {
   const own = new Set(((byId[pid] || {}).evidence || []).map(e => e.src));
-  return (mentionsByPerson[pid] || []).filter(s => !own.has(s.id));
+  return (MENTIONS[pid] || []).map(id => srcById[id])
+                              .filter(s => s && !own.has(s.id));
 }
 
 /* ================= chain of assumptions =================
@@ -1764,10 +1766,12 @@ function openPerson(id) {
         : '<div class="empty">Источников пока нет.</div>'}</div></details>
     ${mentions.length ? `<details class="fold"><summary>Упомянут в документах
       <span class="count-pill">${mentions.length}</span>
-      <span class="fold-hint">называют его, но ничего о нём не доказывают</span></summary>
-      <div class="fold-body"><div class="empty">Эти документы называют человека, но
-        не приведены как основание чего-либо о нём: ни существования, ни отождествления,
-        ни родства. Чаще всего он там сосед, поручитель или упомянут по ходу разбора.</div>
+      <span class="fold-hint">относятся к нему, но ничего о нём не доказывают</span></summary>
+      <div class="fold-body"><div class="empty">Эти документы относятся к человеку,
+        но не приведены как основание чего-либо о нём: ни существования, ни отождествления,
+        ни родства. Чаще всего он там сосед, поручитель или упомянут по ходу разбора.
+        Там, где лист разобран, он на нём назван; где разбора ещё нет — так записано
+        находкой.</div>
         ${mentions.map(s => sourceHTML(s, null)).join('')}</div></details>` : ''}
     <details class="fold"><summary>Гипотезы <span class="count-pill">${hyps.length}</span>
       <span class="fold-hint">${hyps.length ? 'версии и как их проверить' : 'пока нет'}</span></summary>
@@ -2245,6 +2249,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 const GRAPH_DATA = __GRAPH_JSON__;
 const SOURCES = __SOURCES_JSON__;
 const SHOTS_BY_PERSON = __SHOTS_JSON__;  // {person_id: [{file, stem, role, record, srcs, basis}]}
+const MENTIONS = __MENTIONS_JSON__;   // {person_id: [src_id, ...]} — см. mentionsOf
 const FOLIOS = __FOLIOS_JSON__;          // реестр листов: {стем: {text, case, eyes, people}}
 const ROLE_GROUP = __ROLE_GROUP_JSON__;  // заголовки групп — из folios.py, чтобы не разошлись
 const HYPOTHESES = __HYPOTHESES_JSON__;
@@ -2279,9 +2284,39 @@ _folios = load_folio_registry()
 _have = folio_lib.web_scans(project_root)
 _shots = folio_lib.attach(graph, sources, folio_lib.load_folios(data_dir), _have, project_root)
 
+
+# --------------------------------------------------------------------------
+# «Упомянут в документах» — реестр решает там, где может
+#
+# 🔴 До 2026-08-12 раздел строился прямо из `people_mentioned`, а страница
+# при этом УТВЕРЖДАЛА: «эти документы называют человека». Измерено: из 1001
+# пары «источник ↔ упомянутый» реестр подтверждает 354, молчит про 531
+# (у источника нет снимков либо не все листы разобраны) — и ПРОТИВОРЕЧИТ 116:
+# все листы источника разобраны, а человека на них нет.
+# Для этих 116 фраза на странице была просто неверна.
+#
+# ⇒ Правило то же, что у вида записи и у координаты в шифре: НАБЛЮДЕНИЕ СИЛЬНЕЕ
+# ЗАПИСИ. Где реестр может говорить — говорит он; где не может — остаётся
+# `people_mentioned`, и формулировка на странице честно этого не скрывает.
+# --------------------------------------------------------------------------
+_named_on = {st: {i["id"] for i in folio_lib.folio_people(c)}
+             for st, c in _folios.items() if folio_lib.folio_resolved(c)}
+_mentions = {}
+for _s in sources.get("sources") or []:
+    _stems = folio_lib.source_folios(_s, _have, None, project_root)
+    _speaks = bool(_stems) and all(st in _named_on for st in _stems)
+    _on = set().union(*[_named_on[st] for st in _stems if st in _named_on]) or set() \
+        if _stems else set()
+    for _pid in (_s.get("people_mentioned") or []):
+        if _speaks and _pid not in _on:
+            continue          # реестр прочёл все листы источника и человека там нет
+        _mentions.setdefault(_pid, []).append(_s["id"])
+
+
 replacements = {
     '__TITLE__': title,
     '__SUBTITLE__': subtitle,
+
     '__RESEARCHER__': meta.get('researcher', ''),
     '__UPDATED__': meta.get('last_updated', ''),
     # 🔴 Время сборки печатается в подвале НЕ для красоты. 2026-08-08 владелец
@@ -2297,6 +2332,7 @@ replacements = {
     '__SOURCES_JSON__': js_json(sources),
     '__SHOTS_JSON__': js_json(_shots),
     '__FOLIOS_JSON__': js_json(_folios),
+    '__MENTIONS_JSON__': js_json(_mentions),
     '__ROLE_GROUP_JSON__': js_json(folio_lib.ROLE_GROUP),
     '__HYPOTHESES_JSON__': js_json(hypotheses),
     '__JS__': JS,
