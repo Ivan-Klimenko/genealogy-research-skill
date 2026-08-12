@@ -393,6 +393,48 @@ check("вид вне перечня считается незаданным",
       folio_lib.folio_kind({"kind": "свадьба"}) is None
       and folio_lib.folio_kind({"kind": "marriage"}) == "marriage")
 
+print("12. Родство, заявленное документом: «чей» и объявленное расхождение")
+# 🔴 РАДИ ЧЕГО ВСЁ ЭТО. Признак «лист называет родителем, а ребра в графе нет»
+# на живых данных дал 18 пар. Без `of` он не различал отца невесты и отца
+# жениха — то есть на две трети состоял из шума брачного формуляра. С `of`
+# осталось 7, и все семь оказались настоящими: ШЕСТЬ материнских связей,
+# названных поимённо и не проведённых в граф, и ОДНО расхождение, где писарь
+# метрики поставил в графу родителей деда.
+_birth = {"kind": "birth", "eyes": "2026-08-12", "people": [
+    {"id": "baby", "as": "subject", "record": 1},
+    {"id": "father", "as": "parent", "record": 1},
+    {"id": "mother", "as": "parent", "record": 1}]}
+_marr = {"kind": "marriage", "eyes": "2026-08-12", "people": [
+    {"id": "groom", "as": "subject", "record": 2},
+    {"id": "bride", "as": "subject", "record": 2},
+    {"id": "bride_father", "as": "parent", "record": 2, "of": "bride"}]}
+_disp = {"kind": "birth", "eyes": "2026-08-12", "people": [
+    {"id": "baby", "as": "subject", "record": 3},
+    {"id": "grandfather", "as": "parent", "record": 3, "disputed": "hyp_001"}]}
+
+_claim = folio_lib.claimed_kinship(folio_lib.record_groups(_birth)[1])
+check("в записи о рождении субъект один — «чей» выводится сам",
+      sorted((a, b) for a, b, _, _ in _claim) == [("father", "baby"), ("mother", "baby")],
+      str(_claim))
+_claim = folio_lib.claimed_kinship(folio_lib.record_groups(_marr)[2])
+check("на брачной записи отец достаётся ТОЙ стороне, что названа",
+      _claim == [("bride_father", "bride", "parent", None)], str(_claim))
+check("без `of` на брачной записи адресат считается неоднозначным",
+      folio_lib.ambiguous_addressee(_marr, folio_lib.record_groups(
+          {"people": [{"id": "groom", "as": "subject", "record": 2},
+                      {"id": "bride", "as": "subject", "record": 2},
+                      {"id": "f", "as": "parent", "record": 2}]})[2]) is True)
+check("в записи о рождении неоднозначности нет",
+      folio_lib.ambiguous_addressee(_birth, folio_lib.record_groups(_birth)[1]) is False)
+# расхождение объявляется, а не замалчивается: документ говорит своё, граф своё
+_claim = folio_lib.claimed_kinship(folio_lib.record_groups(_disp)[3])
+check("объявленное расхождение доезжает до потребителя",
+      _claim == [("grandfather", "baby", "parent", "hyp_001")], str(_claim))
+check("родитель не становится родителем самому себе",
+      folio_lib.claimed_kinship([
+          {"id": "x", "as": "subject", "record": 1, "of": None, "disputed": None},
+          {"id": "x", "as": "parent", "record": 1, "of": None, "disputed": None}]) == [])
+
 # прибираем за собой: сгенерированное в фикстурах не коммитится
 for d in (FIX / "minimal", FIX / "inverted_chain", FIX / "false_identification",
           FIX / "superseded", FIX / "astray_document"):

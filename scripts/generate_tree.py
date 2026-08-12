@@ -141,6 +141,7 @@ CSS = r"""
   --no: #d0453f;
   --open: #3f7fd0;
   --warn: #d99a2b;
+  --bad: #b03030;
   --shadow-sm: 0 1px 2px rgba(20, 30, 60, .07);
   --shadow-md: 0 2px 6px rgba(20, 30, 60, .08), 0 12px 28px rgba(20, 30, 60, .07);
   --radius: 12px;
@@ -164,6 +165,7 @@ CSS = r"""
   --male: #64A6E8;
   --female: #E86A96;
   --subject: #E8BC63;
+  --bad: #e88080;
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, .4);
   --shadow-md: 0 2px 6px rgba(0, 0, 0, .4), 0 12px 28px rgba(0, 0, 0, .35);
 }
@@ -605,6 +607,8 @@ details.fold.why .fold-body { font-size: 12.5px; color: var(--muted); padding-bo
    и прятать его нельзя: читатель должен видеть слова документа рядом с нашим
    утверждением и ссылку на то, чем утверждение держится. */
 .shot-ident { font-size: 11px; color: var(--warn); line-height: 1.2; }
+.shot-disputed { font-size: 11px; color: var(--bad); line-height: 1.25;
+                 margin-top: 2px; }
 
 /* ---------- просмотр снимка во весь экран ---------- */
 /* 🔴 ПОДПИСЬ — ПОЛОСА ПОД СНИМКОМ, А НЕ ПЛАШКА ПОВЕРХ НЕГО. Раньше она висела
@@ -1651,6 +1655,8 @@ function shotsHTML(pid) {
           ${s.as_written ? `<figcaption class="shot-ident">на листе: «${esc(s.as_written)}»${
               s.hyp ? ` · опознан по ${esc(s.hyp)}` : ''}</figcaption>` : ''}
           ${who ? `<figcaption class="shot-who">с ним на листе: ${esc(who)}</figcaption>` : ''}
+          ${s.disputed ? `<figcaption class="shot-disputed">⚠️ родство, названное этой записью,
+              исследованием не признано — разобрано в ${esc(s.disputed)}</figcaption>` : ''}
         </figure>`;
       }).join('')}</div>
     </div>`).join('');

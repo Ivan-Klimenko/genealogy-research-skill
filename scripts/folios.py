@@ -149,9 +149,65 @@ def folio_people(folio):
         out.append({"id": item["id"],
                     "as": role if role in ROLES else "mentioned",
                     "record": item.get("record"),
+                    "of": str(item.get("of") or "").strip() or None,
+                    "disputed": str(item.get("disputed") or "").strip() or None,
                     "as_written": str(item.get("as_written") or "").strip() or None,
                     "hyp": str(item.get("hyp") or "").strip() or None})
     return out
+
+
+def record_groups(folio):
+    """{номер записи: [люди этой записи]} — запись, а не разворот.
+
+    ⚠️ Разворот и запись — разные вещи (правило 15): на одном скане бывает
+    пять рождений. Роль относится к ЗАПИСИ, и группировать надо по ней.
+    Люди без номера собираются под ключом None — так выглядят надгробие,
+    фотография и лист семейных записей, где записи нумеровать нечем.
+    """
+    groups = {}
+    for item in folio_people(folio):
+        groups.setdefault(item.get("record"), []).append(item)
+    return groups
+
+
+def claimed_kinship(items):
+    """[(кто, кому, роль, оспорено_ли)] — родство, которое ЗАЯВЛЯЕТ эта запись.
+
+    🔴 Это утверждение ДОКУМЕНТА, а не наше. Совпадать с графом оно не обязано,
+    и самый дорогой случай — как раз несовпадение: писарь метрики поставил
+    в графу родителей главу двора, то есть деда, и запись честно называет
+    отцом не того. Пока такое расхождение живёт прозой, оно невидимо;
+    поле `disputed` называет гипотезу, которая расхождение разобрала.
+
+    Адресат берётся из `of`, а если субъект в записи один — из него.
+    """
+    subj = [i for i in items if i["as"] in ("subject", "deceased")]
+    out = []
+    for it in items:
+        if it["as"] not in ("parent", "spouse"):
+            continue
+        target = it["of"] or (subj[0]["id"] if len(subj) == 1
+                              and subj[0]["id"] != it["id"] else None)
+        if target:
+            out.append((it["id"], target, it["as"], it["disputed"]))
+    return out
+
+
+def ambiguous_addressee(folio, items):
+    """Нужен ли в этой записи `of` — то есть «чей».
+
+    🔴 Ответ зависит от ВИДА записи, и в этом весь смысл поля `kind`.
+    В записи о рождении субъект один, младенец, и родители — его; сказать
+    «чей» нечего. В записи о браке субъектов ДВА, жених и невеста, а отец
+    назван обычно один — и без указания, чей он, запись читается как
+    утверждение о родстве, которого документ не делал.
+    ⚠️ Живой случай: «отец невесты» на брачной записи выглядел ровно как
+    «отец жениха» — прогон «лист называет родителем, а ребра нет» дал
+    18 пар, из которых бо́льшая часть оказалась этим артефактом формуляра.
+    """
+    kin = [i for i in items if i["as"] in ("parent", "spouse")]
+    subj = [i for i in items if i["as"] in ("subject", "deceased")]
+    return bool(kin) and len(subj) > 1
 
 
 # --------------------------------------------------------------------------
@@ -494,13 +550,15 @@ def attach(graph, sources_doc, folios, have, project=None):
     out = {pid: [] for pid in people}
     seen = {pid: set() for pid in people}
 
-    def put(pid, stem, role, record, srcs, basis, as_written=None, hyp=None):
+    def put(pid, stem, role, record, srcs, basis,
+            as_written=None, hyp=None, disputed=None, kind=None):
         if pid not in out or stem in seen[pid]:
             return
         seen[pid].add(stem)
         out[pid].append({"file": have[stem], "stem": stem, "role": role,
                          "record": record, "srcs": sorted(srcs), "basis": basis,
-                         "as_written": as_written, "hyp": hyp})
+                         "as_written": as_written, "hyp": hyp,
+                         "disputed": disputed, "kind": kind})
 
     # какие источники разбирают какой лист — нужно и для подписи, и для перехода
     src_of = {}
@@ -518,7 +576,8 @@ def attach(graph, sources_doc, folios, have, project=None):
         for item in folio_people(folio):
             put(item["id"], stem, item["as"], item["record"],
                 src_of.get(stem, set()) | set(folio.get("sources") or []),
-                "folio", item["as_written"], item["hyp"])
+                "folio", item["as_written"], item["hyp"],
+                item["disputed"], folio_kind(folio))
 
     order = {r: i for i, r in enumerate(ROLE_ORDER)}
     for pid in out:

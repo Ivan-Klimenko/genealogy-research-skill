@@ -887,6 +887,10 @@ CAP_FILE = DATA / "folios.yaml"
 if CAP_FILE.is_file():
     _caps = (yaml.safe_load(CAP_FILE.read_text(encoding="utf-8")) or {}).get("folios") or {}
     _no_eyes, _no_kind, _resolved = [], [], 0
+    _pc_edges = {(r.get("parent"), r.get("child")) for r in rels
+                 if r.get("type") == "parent_child"}
+    _mar_edges = {tuple(sorted((r.get("person1"), r.get("person2")))) for r in rels
+                  if r.get("type") == "marriage"}
     # устройство дел — вычисляемый файл; нет его, значит сверка вида записи
     # просто не работает, и это не повод ругаться (проект мог его не заводить)
     _cs_file = DATA / "case_structure.yaml"
@@ -993,6 +997,54 @@ if CAP_FILE.is_file():
                     warnings.append(f"folios[{stem}]: {pid} назван на листе, но имени "
                                     f"«{by_id[pid]['name_ru'].split()[0]}» нет "
                                     f"в расшифровке разворота — проверить глазами")
+        # --- «чей»: адресат роли внутри записи
+        # 🔴 На записи о браке субъектов ДВА, а отец назван обычно один, и без
+        # указания «чей» запись читается как утверждение о родстве, которого
+        # документ не делал. Ровно так отец невесты выглядел отцом жениха.
+        for _rec, _items in folio_lib.record_groups(cap).items():
+            _here = {i["id"] for i in _items}
+            for _it in _items:
+                if not _it["of"]:
+                    continue
+                if _it["of"] not in pids:
+                    errors.append(f"folios[{stem}]: of -> несуществующий {_it['of']} "
+                                  f"у {_it['id']}")
+                elif _it["of"] not in _here:
+                    errors.append(f"folios[{stem}]: {_it['id']} назван роднёй {_it['of']}, "
+                                  f"а того нет в записи № {_rec} этого листа — «чей» "
+                                  f"указывает внутрь записи, а не в граф")
+                elif _it["of"] == _it["id"]:
+                    errors.append(f"folios[{stem}]: {_it['id']} назван роднёй самому себе")
+            # 🔴 ГЛАВНЫЙ ПРИЗНАК ЭТОГО БЛОКА: родство, ЗАЯВЛЕННОЕ ДОКУМЕНТОМ,
+            # обязано кончиться либо ребром в графе, либо объявленным
+            # расхождением. Третьего — «лист говорит, а мы не заметили» —
+            # быть не должно: именно так шесть материнских связей, названных
+            # поимённо, пролежали вне графа (правило 17).
+            for _who, _whom, _role, _disp in folio_lib.claimed_kinship(_items):
+                if _disp:
+                    if _disp not in hids:
+                        errors.append(f"folios[{stem}]: disputed -> несуществующая "
+                                      f"гипотеза {_disp} у {_who}")
+                    elif _hyp_status.get(_disp) == "rejected":
+                        errors.append(f"folios[{stem}]: расхождение у {_who} объявлено "
+                                      f"ОТКЛОНЁННОЙ гипотезой {_disp}")
+                    continue
+                _pair = ((_who, _whom) if _role == "parent"
+                         else tuple(sorted((_who, _whom))))
+                if _pair not in (_pc_edges if _role == "parent" else _mar_edges):
+                    warnings.append(
+                        f"folios[{stem}]: запись № {_rec} называет {_who} "
+                        f"{'родителем' if _role == 'parent' else 'супругом'} "
+                        f"{_whom}, а такой связи в графе нет. Либо провести "
+                        f"(правило 17), либо объявить расхождение полем `disputed`")
+            if folio_lib.ambiguous_addressee(cap, _items):
+                _need = [i["id"] for i in _items
+                         if i["as"] in ("parent", "spouse") and not i["of"]]
+                if _need:
+                    warnings.append(
+                        f"folios[{stem}]: в записи № {_rec} субъектов больше одного, "
+                        f"а у {', '.join(_need)} не сказано, ЧЕЙ он (`of`) — "
+                        f"на брачной записи отец невесты неотличим от отца жениха")
         for sid in (cap.get("sources") or []):
             if sid not in sids:
                 errors.append(f"folios[{stem}]: sources -> несуществующий {sid}")
