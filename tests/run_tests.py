@@ -356,6 +356,43 @@ with tempfile.TemporaryDirectory() as tmp:
     check("роль и номер записи сохранены",
           att["our_man"][0]["role"] == "subject" and att["our_man"][0]["record"] == 7)
 
+print("11. Вид записи на листе: устройство дела — детектор, а не источник")
+# 🔴 НАСТОЯЩИЙ ОТКАЗ, ПОЙМАННЫЙ 2026-08-12 ПЕРВЫМ ЖЕ ПРОГОНОМ. Первая версия
+# признака считала устройство дела надёжным, если книги идут по возрастанию
+# скана (`order: forward`), — и обвинила верно подписанный лист брачной записи.
+# Дело, на котором она споткнулась, САМО объявляло `parts_reliable: false`
+# и `headers_noisy: true`, а внутри года его книги шли 3, 1, 3, 1 — при таком
+# перечне «последняя начавшаяся книга» не значит ничего. Признак, написанный
+# по одному полю, описывает поле, а не данные.
+CASES = {
+    "100": {"order": "forward", "parts_reliable": True, "headers_noisy": False,
+            "books": [[1, 1900, 1], [50, 1900, 2], [80, 1900, 3]],
+            "missing_parts": {}},
+    "200": {"order": "forward", "parts_reliable": False, "headers_noisy": True,
+            "books": [[1, 1900, 3], [40, 1900, 1], [70, 1900, 3], [90, 1900, 1]],
+            "missing_parts": {"1900": [2]}},
+}
+check("надёжное дело: вид вычислен и помечен надёжным",
+      folio_lib.kind_from_structure("d100_sk060", CASES) == ("marriage", True))
+check("дело, объявившее parts_reliable=false, надёжным не считается",
+      folio_lib.kind_from_structure("d200_sk060", CASES)[1] is False)
+check("немонотонный перечень книг тоже снимает доверие",
+      folio_lib.parts_trustworthy(
+          {"order": "forward", "parts_reliable": True, "headers_noisy": False,
+           "books": [[1, 1900, 3], [40, 1900, 1]]}) is False)
+check("дела без перечня книг судить нечем",
+      folio_lib.kind_from_structure("d999_sk001", CASES) == (None, False))
+# обратный детектор: лист, прочитанный глазами, СИЛЬНЕЕ вычисленной структуры
+check("лист опровергает missing_parts",
+      folio_lib.structure_denies_part("d200_sk060", "marriage", 1900, CASES) is True)
+check("год как строка и как число — одно и то же",
+      folio_lib.structure_denies_part("d200_sk060", "marriage", "1900", CASES) is True)
+check("часть, которая в деле есть, отрицанием не объявляется",
+      folio_lib.structure_denies_part("d100_sk060", "marriage", 1900, CASES) is False)
+check("вид вне перечня считается незаданным",
+      folio_lib.folio_kind({"kind": "свадьба"}) is None
+      and folio_lib.folio_kind({"kind": "marriage"}) == "marriage")
+
 # прибираем за собой: сгенерированное в фикстурах не коммитится
 for d in (FIX / "minimal", FIX / "inverted_chain", FIX / "false_identification",
           FIX / "superseded", FIX / "astray_document"):

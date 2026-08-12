@@ -886,7 +886,12 @@ if _raw_orphan:
 CAP_FILE = DATA / "folios.yaml"
 if CAP_FILE.is_file():
     _caps = (yaml.safe_load(CAP_FILE.read_text(encoding="utf-8")) or {}).get("folios") or {}
-    _no_eyes, _resolved = [], 0
+    _no_eyes, _no_kind, _resolved = [], [], 0
+    # устройство дел — вычисляемый файл; нет его, значит сверка вида записи
+    # просто не работает, и это не повод ругаться (проект мог его не заводить)
+    _cs_file = DATA / "case_structure.yaml"
+    CASE_STRUCT = ((yaml.safe_load(_cs_file.read_text(encoding="utf-8")) or {}).get("cases") or {}
+                   if _cs_file.is_file() else {})
 
     def _markup_of(stem):
         m = re.match(r"^d(\d{1,4})_sk(\d{1,4})", stem, re.I)
@@ -905,6 +910,31 @@ if CAP_FILE.is_file():
             errors.append(f"folios[{stem}]: пустой text")
         if not str(cap.get("eyes") or "").strip():
             _no_eyes.append(stem)
+        # --- вид записи: наблюдение, сверяемое с устройством дела
+        # ⚠️ Сверка бьёт ТОЛЬКО по делам с прямым порядком книг. В деле
+        # с `order: broken` «последняя начавшаяся книга» ничего не значит,
+        # и предупреждение было бы неустранимым — то есть фоном, а не сигналом.
+        if cap.get("kind") is not None and folio_lib.folio_kind(cap) is None:
+            errors.append(f"folios[{stem}]: неизвестный вид записи kind={cap['kind']!r} "
+                          f"(можно: {', '.join(sorted(folio_lib.KINDS))})")
+        elif cap.get("kind") is None:
+            _no_kind.append(stem)
+        else:
+            _guess, _sure = folio_lib.kind_from_structure(stem, CASE_STRUCT)
+            if _sure and _guess and _guess != folio_lib.folio_kind(cap):
+                warnings.append(
+                    f"folios[{stem}]: на листе стоит {cap['kind']}, а по устройству "
+                    f"дела здесь {_guess} (книги в прямом порядке, шапки чистые — "
+                    f"значит сверка надёжна) — посмотреть глазами")
+            # обратная сверка: лист доказывает часть, которой структура не знает
+            _y = re.search(r"кн\.?\s*(\d{4})", str(cap.get("case") or ""))
+            if _y and folio_lib.structure_denies_part(
+                    stem, folio_lib.folio_kind(cap), _y.group(1), CASE_STRUCT):
+                warnings.append(
+                    f"folios[{stem}]: лист прочитан глазами как {cap['kind']} за "
+                    f"{_y.group(1)} г., а case_structure зовёт эту часть отсутствующей "
+                    f"в деле. Прав лист — значит перечень книг неполон, и отрицания, "
+                    f"оправданные этим `missing_parts`, ничем не оправданы")
         markup = _markup_of(stem)
         recs = cap.get("records") or []
         if markup is not None and recs:
@@ -971,6 +1001,11 @@ if CAP_FILE.is_file():
     if _no_eyes:
         warnings.append(f"подписей к снимкам без отметки «сверено глазами»: {len(_no_eyes)} — "
                         f"{', '.join(sorted(_no_eyes)[:5])}")
+    if _no_kind:
+        warnings.append(f"листов без вида записи (`kind`): {len(_no_kind)} — "
+                        f"{', '.join(sorted(_no_kind)[:5])}. Без него роль на листе "
+                        f"двусмысленна: на брачной записи отец невесты неотличим "
+                        f"от отца жениха")
     CAP_STAT = (f"Реестр листов: {len(_caps)} записей, сверено глазами "
                 f"{len(_caps) - len(_no_eyes)}, разобрано по людям {_resolved}; "
                 f"файлов в data/scans: {len(SCAN_STEMS)}. "
