@@ -364,6 +364,22 @@ for r in rels:
     # а не сведены нами: документ назвал обоих, либо свидетель знал обоих.
     # Отчество, арифметика и общее селение — это сужение круга, а не доказательство.
     strong = [e for e in ev if isinstance(e, dict) and e.get("role") in STRONG_ROLES]
+    # ⭐ ИСКЛЮЧЕНИЕ, И ЭТО ТОЧНОСТЬ, А НЕ ПОСЛАБЛЕНИЕ: братство ВЫВОДИТСЯ, когда
+    # у обоих подтверждён общий родитель. Это следствие из подтверждённых фактов,
+    # а не сводка вроде отчества, и требовать под него отдельного документа —
+    # значит требовать доказательства у теоремы.
+    # 🔴 Правило при этом цело: родительские рёбра, из которых следствие выведено,
+    # обязаны иметь сильную роль КАЖДОЕ.
+    # ⚠️ Заведено 2026-08-12, когда проверка правила 1 по листам показала, чем
+    # такие рёбра держались на самом деле: `joint_mention` ставили на документ,
+    # называющий ОДНОГО из двоих. Роль была неверна, а связь верна.
+    if r.get("type") == "sibling" and not strong:
+        _p1 = {x.get("parent") for x in rels if x.get("type") == "parent_child"
+               and x.get("child") == r.get("person1") and x.get("confidence") == "confirmed"}
+        _p2 = {x.get("parent") for x in rels if x.get("type") == "parent_child"
+               and x.get("child") == r.get("person2") and x.get("confidence") == "confirmed"}
+        if _p1 & _p2:
+            strong = [{"src": None, "role": "derived_from_parents"}]
     if r.get("confidence") == "confirmed" and not strong:
         errors.append(
             f"relationship {rid}: confidence=confirmed, но ни один документ не назвал обоих "

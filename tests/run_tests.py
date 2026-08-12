@@ -460,6 +460,55 @@ check("указанный лист, не называющий обоих, — о
       folio_lib.joint_mention_status({"father", "son"}, ["sheet_a"], _named, "sheet_b")[0]
       == "not_named")
 
+# ⭐ Братство ВЫВОДИТСЯ из общих подтверждённых родителей — и это не послабление
+# правила 1, а точность. Проверка правила по листам показала, чем такие рёбра
+# держались на деле: joint_mention ставили на документ, называющий ОДНОГО
+# из двоих. Роль была неверна, связь верна.
+with tempfile.TemporaryDirectory() as tmp:
+    d = Path(tmp)
+    shutil.copytree(FIX / "minimal", d, dirs_exist_ok=True)
+    gfile = d / "data" / "family_graph.yaml"
+    doc = yaml.safe_load(gfile.read_text())
+    root = doc["people"][0]
+    sid = yaml.safe_load((d / "data" / "sources.yaml").read_text())["sources"][0]["id"]
+    hfile = d / "data" / "hypotheses.yaml"
+    hdoc = yaml.safe_load(hfile.read_text())
+    hdoc.setdefault("hypotheses", []).append({
+        "id": "hyp_900", "statement": "Проверочная версия", "status": "open",
+        "confidence": "low", "evidence_for": [], "evidence_against": [],
+        "related_people": ["kid_b"], "related_sources": [],
+        "how_to_resolve": "Только для теста: ребро probable обязано иметь версию."})
+    hdoc.setdefault("meta", {})["total_hypotheses"] = len(hdoc["hypotheses"])
+    hfile.write_text(yaml.dump(hdoc, allow_unicode=True, sort_keys=False))
+    kid = dict(root)
+    for who, name in (("kid_a", "Первый Ребёнок"), ("kid_b", "Второй Ребёнок")):
+        doc["people"].append({**kid, "id": who, "name_ru": name, "name_full": name,
+                              "generation": root["generation"] - 1, "role": "потомок"})
+    ev = [{"src": sid, "role": "joint_mention"}]
+    doc["relationships"] = [
+        {"id": "rel_001", "type": "parent_child", "parent": root["id"], "child": "kid_a",
+         "parent_role": "father", "confidence": "confirmed", "evidence": ev,
+         "hypotheses": [], "notes": "Проверочное ребро."},
+        {"id": "rel_002", "type": "parent_child", "parent": root["id"], "child": "kid_b",
+         "parent_role": "father", "confidence": "confirmed", "evidence": ev,
+         "hypotheses": [], "notes": "Проверочное ребро."},
+        {"id": "rel_003", "type": "sibling", "person1": "kid_a", "person2": "kid_b",
+         "confidence": "confirmed", "evidence": [{"src": sid, "role": "context"}],
+         "hypotheses": [], "notes": "Братство выводится из общих родителей."}]
+    doc["meta"]["total_people"] = len(doc["people"])
+    doc["meta"]["total_relationships"] = 3
+    gfile.write_text(yaml.dump(doc, allow_unicode=True, sort_keys=False))
+    out = "".join(x or "" for x in (lambda r: (r.stdout, r.stderr))(run("validate.py", d)))
+    NOPROOF = "relationship rel_003: confidence=confirmed"
+    check("братство из общих подтверждённых родителей — confirmed без документа на пару",
+          NOPROOF not in out, out[-400:])
+    # а если родительское ребро слабое — следствия нет, и правило работает как прежде
+    doc["relationships"][1]["confidence"] = "probable"
+    doc["relationships"][1]["hypotheses"] = ["hyp_900"]
+    gfile.write_text(yaml.dump(doc, allow_unicode=True, sort_keys=False))
+    out = "".join(x or "" for x in (lambda r: (r.stdout, r.stderr))(run("validate.py", d)))
+    check("слабое родительское ребро следствия не даёт", NOPROOF in out, out[-400:])
+
 check("родитель не становится родителем самому себе",
       folio_lib.claimed_kinship([
           {"id": "x", "as": "subject", "record": 1, "of": None, "disputed": None},
