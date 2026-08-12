@@ -12,6 +12,7 @@ data/hypotheses.yaml, data/research_queue.yaml.
 концов ребра, канонический порядок, отсутствие циклов, согласованность пола и роли,
 и то, что confidence связи подкреплена источником.
 """
+import collections
 import hashlib
 import json
 import re
@@ -1135,6 +1136,35 @@ if CAP_FILE.is_file():
             if any(st in _named_on for st in _stems) else set()
         for _pid in (_s.get("people_mentioned") or []):
             _pm[0 if _pid in _on else (2 if _speaks else 1)] += 1
+    # 🔴 ПРАВИЛО 17 («упомянут ≠ проведён») В ИЗМЕРИМОМ ВИДЕ. Реестр называет
+    # человека на листе, а в его `evidence` нет ни одного источника, разбирающего
+    # этот лист, — значит найденное застряло на полпути между документом
+    # и карточкой. Упоминание восприемником или поручителем — законное
+    # `named_directly`: оно доказывает существование, и таких пар большинство.
+    # ⚠️ Разрыв растёт МЕХАНИЧЕСКИ: реестр наполняется каждым заходом, `evidence`
+    # человека — нет. Это не долг прошлого, а незамкнутый контур.
+    _src_of_stem = {}
+    for _sid, _sts in _src_stems.items():
+        for _st in _sts:
+            _src_of_stem.setdefault(_st, set()).add(_sid)
+    _ev_gap = collections.Counter()
+    for _st, _cap in _caps.items():
+        if not folio_lib.folio_resolved(_cap):
+            continue
+        _srcs = _src_of_stem.get(_st, set()) | set(_cap.get("sources") or [])
+        if not _srcs:
+            continue
+        for _it in folio_lib.folio_people(_cap):
+            _p = by_id.get(_it["id"])
+            if _p and not (_srcs & {e["src"] for e in (_p.get("evidence") or [])
+                                    if isinstance(e, dict) and e.get("src")}):
+                _ev_gap[_it["id"]] += 1
+    if _ev_gap:
+        warnings.append(
+            f"🔴 ЛИСТ НАЗЫВАЕТ, А У ЧЕЛОВЕКА ЭТОГО ИСТОЧНИКА НЕТ ({sum(_ev_gap.values())} "
+            f"пар у {len(_ev_gap)} человек): найденное застряло между документом "
+            f"и карточкой (правило 17). Больше всего у "
+            + ", ".join(f"{k} ({v})" for k, v in _ev_gap.most_common(5)))
     PM_STAT = (f"people_mentioned против реестра: подтверждено {_pm[0]}, "
                f"реестр молчит {_pm[1]}, противоречит {_pm[2]} "
                f"(последние на страницу не выводятся)")
@@ -2558,6 +2588,30 @@ def write_status():
         + ("" if FOLIO_WIDE else " — чисто"))
     add(f"- Людей без единого источника: "
         f"**{sum(1 for p in people if not p.get('sources'))}**")
+    # ⭐ Три долга, добавленные 2026-08-12 при снятии плана надёжности. Каждый
+    # был найден аудитом и не имел дома: аудит кончился, а долг остался бы жить
+    # только в прозе отчёта — то есть ровно так, как умирает всякий разбор.
+    _noraw = [s["id"] for s in sources["sources"] if not s.get("raw_record")]
+    _noraw_strong = {e["src"] for r in rels if r.get("confidence") == "confirmed"
+                     for e in (r.get("evidence") or [])
+                     if isinstance(e, dict) and e.get("src") in set(_noraw)
+                     and e.get("role") in STRONG_ROLES}
+    add(f"- Источников без дословной копии: **{len(_noraw)}** из {len(sources['sources'])}"
+        f"; из них держат подтверждённые связи сильной ролью — **{len(_noraw_strong)}**"
+        + (f" ({', '.join(sorted(_noraw_strong)[:8])})" if _noraw_strong else ""))
+    _targeted = {pid for tk in tasks for pid in (tk.get("target_people") or [])
+                 if tk.get("status") in ("pending", "in_progress", "blocked")}
+    _wish_no_task = [p["id"] for p in people
+                     if str(p.get("research_wishes") or "").strip() and p["id"] not in _targeted]
+    add(f"- Людей с желаниями, но без живой задачи: **{len(_wish_no_task)}** — "
+        f"желание, не ставшее задачей, не будет исполнено никогда")
+    _det = (graph.get("meta") or {}).get("detached_branches") or {}
+    _det_stale = [pid for pid, txt in _det.items()
+                  if "ОЖИДАНИ" in str(txt)
+                  and any(_hyp_status.get(h) == "confirmed"
+                          for h in re.findall(r"hyp_\d+", str(txt)))]
+    add(f"- Отсоединённых узлов, чьё ожидание уже решено: **{len(_det_stale)}**"
+        + (" — " + ", ".join(_det_stale) if _det_stale else " — чисто"))
     add(f"- Предупреждений валидатора: **{len(warnings)}**")
     add("")
     add("---")
