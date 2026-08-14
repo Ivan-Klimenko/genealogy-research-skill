@@ -639,6 +639,64 @@ with tempfile.TemporaryDirectory() as tmp:
           "Заготовок (`stub`) без единой задачи" in status and "blank_node" in status,
           status[-400:])
 
+# 🔴 РЕГРЕССИЯ НА `research_priority` (заведена 2026-08-14, вместе с проверкой stub).
+# Приоритет 1 — утверждение о НАСТОЯЩЕМ ВРЕМЕНИ («узел двигает дерево прямо сейчас»),
+# и без хода оно пустое. А обратная сторона — «приоритет 0, а задача есть» — проверке
+# НЕ подлежит, и тест стережёт именно это: `target_people` говорит «задача касается
+# человека», а не «его исследуют ради него самого». Задача-разбор называет всех разом,
+# однофамилец-контроль стоит в задаче о нашем предке, и оба обязаны иметь приоритет 0.
+print("15. research_priority: проверяется настоящее время, а не намерение вообще")
+with tempfile.TemporaryDirectory() as tmp:
+    d = Path(tmp)
+    shutil.copytree(FIX / "minimal", d, dirs_exist_ok=True)
+    gfile, qfile = d / "data" / "family_graph.yaml", d / "data" / "research_queue.yaml"
+    doc = yaml.safe_load(gfile.read_text())
+    root = doc["people"][0]
+
+    # ① приоритет 1 без единого хода — ошибка.
+    #    ⚠️ Фикстура приходит с засеянной задачей «опросить живых» (её кладёт
+    #    init_project.py), поэтому очередь тут сперва опустошается: проверяется
+    #    именно отсутствие хода, а не что-то ещё.
+    root["research_priority"] = 1
+    qdoc0 = yaml.safe_load(qfile.read_text())
+    qkey0 = "queue" if "queue" in qdoc0 else "tasks"
+    qdoc0[qkey0] = []
+    qdoc0.setdefault("meta", {}).update({"total": 0, "pending": 0, "total_tasks": 0})
+    qfile.write_text(yaml.dump(qdoc0, allow_unicode=True, sort_keys=False))
+    gfile.write_text(yaml.dump(doc, allow_unicode=True, sort_keys=False))
+    out = "".join(x or "" for x in (lambda r: (r.stdout, r.stderr))(run("validate.py", d)))
+    check("приоритет 1 без хода — ошибка",
+          "research_priority=1" in out and "которой нет" in out, out[-400:])
+
+    # ② назвали человека в живой задаче — претензия снимается
+    qdoc = yaml.safe_load(qfile.read_text())
+    qkey = "queue" if "queue" in qdoc else "tasks"
+    qdoc.setdefault(qkey, []).append({
+        "id": "task_900", "priority": 1, "channel": "desk", "direction": "—",
+        "target_people": [root["id"]], "resolves_hypotheses": [],
+        "target_relation": "Проверочная задача", "goal": "Только для теста.",
+        "what_we_know": "Только для теста.", "search_plan": ["Только для теста."],
+        "status": "pending", "blocked_by": [],
+        "blocked_on": [{"kind": "not_started", "note": "Только для теста."}],
+        "blocked_reason": None, "estimated_effort": "—", "potential_yield": "—",
+        "created": "2026-08-14"})
+    qdoc.setdefault("meta", {})["total_tasks"] = len(qdoc[qkey])
+    qdoc["meta"]["pending"] = sum(1 for t in qdoc[qkey] if t.get("status") == "pending")
+    qfile.write_text(yaml.dump(qdoc, allow_unicode=True, sort_keys=False))
+    out = "".join(x or "" for x in (lambda r: (r.stdout, r.stderr))(run("validate.py", d)))
+    check("названный в живой задаче претензии не вызывает",
+          "research_priority=1" not in out, out[-400:])
+
+    # ③ 🔴 ГЛАВНОЕ: приоритет 0 при живой задаче — ЗАКОННОЕ сочетание, а не ошибка.
+    #    Так стоят однофамильцы-контроли, отсоединённые ветви и всякий, кого назвала
+    #    задача-разбор. Проверка, объявившая бы это расхождением, повышала бы приоритет
+    #    людям, которых мы намеренно не исследуем.
+    root["research_priority"] = 0
+    gfile.write_text(yaml.dump(doc, allow_unicode=True, sort_keys=False))
+    r = run("validate.py", d)
+    check("приоритет 0 при живой задаче ошибкой НЕ является",
+          "ОШИБОК НЕТ" in r.stdout, (r.stdout + r.stderr)[-500:])
+
 check("родитель не становится родителем самому себе",
       folio_lib.claimed_kinship([
           {"id": "x", "as": "subject", "record": 1, "of": None, "disputed": None},
