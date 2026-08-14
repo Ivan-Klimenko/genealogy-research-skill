@@ -558,6 +558,87 @@ with tempfile.TemporaryDirectory() as tmp:
     out = "".join(x or "" for x in (lambda r: (r.stdout, r.stderr))(run("validate.py", d)))
     check("слабое родительское ребро следствия не даёт", NOPROOF in out, out[-400:])
 
+# 🔴 РЕГРЕССИЯ НА РЖАВЧИНУ ФЛАГА `stub` (заведена 2026-08-14).
+# Флаг остаётся авторским — он говорит о НАШЕЙ работе, а не о человеке, — но именно
+# поэтому ржавеет молча. В проекте, из которого вырос навык, из 36 помеченных узлов
+# 26 давно перестали быть заготовками, а карточка каждого печатала родне «известен
+# только по имени в чужой записи»: у одной женщины при 15 источниках, своих датах
+# и трёх живых задачах. Признак обязан ловить обе стороны расхождения.
+print("14. Заготовка: флаг stub сверяется с данными, а не только с самим собой")
+with tempfile.TemporaryDirectory() as tmp:
+    d = Path(tmp)
+    shutil.copytree(FIX / "minimal", d, dirs_exist_ok=True)
+    gfile = d / "data" / "family_graph.yaml"
+    doc = yaml.safe_load(gfile.read_text())
+    root = doc["people"][0]
+
+    # ① ПРОТУХШИЙ ФЛАГ: у корня есть и источники, и даты — заготовкой он быть не может
+    root["stub"] = True
+    gfile.write_text(yaml.dump(doc, allow_unicode=True, sort_keys=False))
+    out = "".join(x or "" for x in (lambda r: (r.stdout, r.stderr))(run("validate.py", d)))
+    check("stub при своих датах и источниках — ошибка",
+          f"person {root['id']}: stub=true" in out and "флаг протух" in out, out[-400:])
+
+    # ② ОБРАТНАЯ СТОРОНА: узел без источников и без своих дат обязан быть назван
+    #    заготовкой — иначе он молча выпадет из работы, и витрина о нём не скажет.
+    #    ⚠️ Наличие ЗАДАЧИ признаком намеренно не считается: задача — это план работы,
+    #    а не её след, и первая редакция признака на этом сама себе противоречила.
+    root["stub"] = False
+    doc["people"].append({
+        "id": "blank_node", "name_ru": "Проверочный узел", "name_full": "Узел Проверочный",
+        "gender": "male", "patronymic": None, "maiden_name": None,
+        "birth_date": None, "birth_place": None, "death_date": None, "death_cause": None,
+        "occupation": None, "generation": root["generation"] + 1,
+        "role": "проверочный", "stub": False, "visible": False, "research_priority": 0,
+        "military_service": None, "rank": None, "awards": [], "evidence": [],
+        "existence": "uncertain", "notes": "Только для теста.",
+        "biography": "Узел заведён только ради проверки признака заготовки и ничего "
+                     "о человеке не утверждает.",
+        "research_wishes": ""})
+    doc["relationships"].append({
+        "id": "rel_900", "type": "parent_child", "parent": "blank_node",
+        "child": root["id"], "parent_role": "father", "confidence": "probable",
+        "evidence": [], "hypotheses": ["hyp_901"], "notes": "Проверочное ребро."})
+    hfile = d / "data" / "hypotheses.yaml"
+    hdoc = yaml.safe_load(hfile.read_text())
+    hdoc.setdefault("hypotheses", []).append({
+        "id": "hyp_901", "statement": "Проверочная версия", "status": "open",
+        "confidence": "low", "evidence_for": [], "evidence_against": [],
+        "related_people": ["blank_node"], "related_sources": [],
+        "how_to_resolve": "Только для теста: ребро probable обязано иметь версию."})
+    hdoc.setdefault("meta", {})["total_hypotheses"] = len(hdoc["hypotheses"])
+    hfile.write_text(yaml.dump(hdoc, allow_unicode=True, sort_keys=False))
+    doc["meta"]["total_people"] = len(doc["people"])
+    doc["meta"]["total_relationships"] = len(doc["relationships"])
+    doc["meta"]["stub_people"] = 0
+    gfile.write_text(yaml.dump(doc, allow_unicode=True, sort_keys=False))
+    out = "".join(x or "" for x in (lambda r: (r.stdout, r.stderr))(run("validate.py", d)))
+    check("узел без источников и своих дат обязан быть назван заготовкой",
+          "person blank_node: не помечен stub" in out, out[-400:])
+
+    # ③ И ЗАГОТОВКА, В КОТОРУЮ НИКТО НЕ ЦЕЛИТ, ДОЛЖНА БЫТЬ ВИДНА В ВИТРИНЕ:
+    #    до 2026-08-14 про заготовки печаталось одно число в скобке заголовка,
+    #    и заготовка без хода ничем не отличалась от забытой.
+    #    ⚠️ Узел здесь ПОТОМОК, а не предок: скрытый предок — отдельная ошибка
+    #    валидатора, и она бы забила проверяемое.
+    doc["people"][-1]["stub"] = True
+    doc["people"][-1]["visible"] = True
+    doc["people"][-1]["research_wishes"] = None
+    doc["people"][-1]["generation"] = root["generation"] - 1
+    doc["relationships"][-1] = {
+        "id": "rel_900", "type": "parent_child", "parent": root["id"],
+        "child": "blank_node", "parent_role": "father", "confidence": "uncertain",
+        "evidence": [], "hypotheses": ["hyp_901"], "notes": "Проверочное ребро."}
+    gfile.write_text(yaml.dump(doc, allow_unicode=True, sort_keys=False))
+    run("validate.py", d, "--fix-counters", "--stamp-prose", "blank_node")
+    r = run("validate.py", d, "--status")
+    check("фикстура для проверки витрины валидна",
+          "ОШИБОК НЕТ" in r.stdout, r.stdout[-500:])
+    status = (d / "STATUS.md").read_text()
+    check("витрина печатает заготовки без задачи отдельным долгом",
+          "Заготовок (`stub`) без единой задачи" in status and "blank_node" in status,
+          status[-400:])
+
 check("родитель не становится родителем самому себе",
       folio_lib.claimed_kinship([
           {"id": "x", "as": "subject", "record": 1, "of": None, "disputed": None},
