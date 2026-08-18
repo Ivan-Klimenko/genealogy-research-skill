@@ -64,6 +64,23 @@ graph = load_yaml(data_dir / 'family_graph.yaml')
 sources = load_yaml(data_dir / 'sources.yaml')
 hypotheses = load_yaml(data_dir / 'hypotheses.yaml')
 
+# --------------------------------------------------------------------------
+# Полные даты рождения ЖИВЫХ на страницу не идут — только год.
+# Страница встраивает граф JSON-ом целиком, а `visible: false` прячет человека
+# лишь с полотна: из исходника страницы его данные никуда не деваются. Аудит
+# 2026-08-18 нашёл в выложенном HTML полные даты рождения пятерых живых людей,
+# включая ребёнка, — при том что сам человек с полотна был скрыт. Живым
+# считается всякий без записи о смерти, рождённый младше ~105 лет назад;
+# сомнение трактуется в пользу приватности. Урезается дата ЗДЕСЬ, при сборке,
+# а не в данных: в данных дата — факт исследования, на странице — публикация.
+# --------------------------------------------------------------------------
+_LIVING_HORIZON = datetime.date.today().year - 105
+for _p in graph.get('people') or []:
+    _bd = str(_p.get('birth_date') or '')
+    _dead = _p.get('death_date') or _p.get('death_year')
+    if not _dead and _bd[:4].isdigit() and int(_bd[:4]) > _LIVING_HORIZON:
+        _p['birth_date'] = _bd[:4]
+
 
 # --------------------------------------------------------------------------
 # Снимки документов: связь «на этом листе назван этот человек»
@@ -991,10 +1008,10 @@ const el = document.getElementById.bind(document);
 const esc = s => String(s == null ? '' : s)
   .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
-const isSubject = p => p.role === 'Это я' || p.id === 'ivan_klimenko';
+const isSubject = p => p.id === ROOT_ID;
 const accentOf = p => isSubject(p) ? 'var(--subject)' : (p.gender === 'female' ? 'var(--female)' : 'var(--male)');
 
-/** "1985-07-05" -> "05.07.1985"; anything else ("~1926", "1953") is kept as written. */
+/** "1874-08-09" -> "09.08.1874"; anything else ("~1926", "1953") is kept as written. */
 function fullDate(d) {
   if (!d) return '';
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(d);
