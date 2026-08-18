@@ -205,7 +205,9 @@ with tempfile.TemporaryDirectory() as tmp:
     g.write_text(re.sub(r"^  biography_basis: .*$", "  biography_basis: 502052322699",
                         g.read_text(), flags=re.M))
     r = run("validate.py", d)
-    stale_before = "биография написана по другим данным" in (r.stdout + r.stderr)
+    # ⚠️ Формулировка сжатая и полная различаются («биографий, написанных…» /
+    # «биография написана…» под --stale-prose) — тест держится за общий корень.
+    stale_before = "по другим данным" in (r.stdout + r.stderr)
     check("подменённый отпечаток честно объявлен расходящимся", stale_before,
           "валидатор не заметил чужой отпечаток")
     # штампуем — и метка обязана ПОГАСНУТЬ с первого раза
