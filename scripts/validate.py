@@ -1706,6 +1706,12 @@ if errlog is not None:
         st = c.get("status")
         if st not in ERR_STATUS:
             errors.append(f"error_log {cid}: status={st!r}, ожидается {ERR_STATUS}")
+        # ⚠️ Имя класса печатается витриной («Что за приём»). Класс err_024 завёл
+        # его под ключом title — и в таблице STATUS.md стояла пустая колонка:
+        # схема расползлась молча, потому что имени никто не требовал.
+        if not str(c.get("name") or "").strip():
+            errors.append(f"error_log {cid}: пустой name — класс без имени приёма "
+                          f"печатается в витрине пустой строкой")
         # 🔴 Без detector это не разбор, а сожаление: нечем найти остальные такие же.
         if not str(c.get("detector") or "").strip():
             errors.append(f"error_log {cid}: пустой detector — класс без исполнимой "
@@ -1880,6 +1886,13 @@ COUNTERS = [
     ("research_queue.yaml", queue["meta"], "blocked", lambda: sum(1 for t in tasks if t.get("status") == "blocked")),
     ("research_queue.yaml", queue["meta"], "cancelled", lambda: sum(1 for t in tasks if t.get("status") == "cancelled")),
 ]
+# ⚠️ Счётчик классов ошибок — в том же списке, и не случайно: meta.classes
+# в error_log.yaml писался рукой и к 2026-08-18 показывал 10 при фактических 24 —
+# в файле, чей главный урок «производное не хранят руками». Файл необязателен,
+# поэтому счётчик добавляется только когда он есть.
+if errlog is not None:
+    COUNTERS.append(("error_log.yaml", errlog["meta"], "classes",
+                     lambda: len(errlog.get("classes") or [])))
 
 
 def meta_block(text):
@@ -2155,6 +2168,8 @@ if "--fix-counters" in sys.argv:
     # перечитываем meta, чтобы сверка ниже шла по исправленным значениям
     reloaded = {"family_graph.yaml": graph, "sources.yaml": sources,
                 "hypotheses.yaml": hyps, "research_queue.yaml": queue}
+    if errlog is not None:
+        reloaded["error_log.yaml"] = errlog
     for fname, obj in reloaded.items():
         obj["meta"] = load(fname)["meta"]
     COUNTERS = [(f, reloaded[f]["meta"], k, fn) for f, _m, k, fn in COUNTERS]
@@ -2702,7 +2717,21 @@ def write_status():
         f"**{len(no_move)}** из {open_n}"
         + (f" — {', '.join(no_move[:25])}{'…' if len(no_move) > 25 else ''}"
            if no_move else " — чисто"))
+    # ⚠️ Sibling, выведенный из двух подтверждённых родительских рёбер, — не долг:
+    # документы у него есть, просто ни один не называет брата с сестрой вместе
+    # (исключение валидатора от 2026-08-12). До 2026-08-18 такие рёбра печатались
+    # здесь со словами «документа нет ни одного» — что для них неправда.
+    _derived_sib = set()
+    for _r in rels:
+        if _r.get("type") != "sibling":
+            continue
+        _pp = [{x.get("parent") for x in rels if x.get("type") == "parent_child"
+                and x.get("child") == _r.get(side) and x.get("confidence") == "confirmed"}
+               for side in ("person1", "person2")]
+        if _pp[0] & _pp[1]:
+            _derived_sib.add(_r["id"])
     _mem_only = [r["id"] for r in rels if r["confidence"] == "confirmed"
+                 and r["id"] not in _derived_sib
                  and not any(e.get("role") in ("joint_mention", "direct_knowledge")
                              for e in (r.get("evidence") or []))]
     _ident = [(p["id"], e["hyp"]) for p in people for e in (p.get("evidence") or [])
@@ -2720,6 +2749,11 @@ def write_status():
            if _byp else " — чисто"))
     add(f"- Подтверждённых связей, стоящих только на семейной памяти: **{len(_mem_only)}**"
         + (f" — {', '.join(_mem_only)}. Документа нет ни одного" if _mem_only else " — чисто"))
+    _ds_conf = sorted(r for r in _derived_sib
+                      if next(x for x in rels if x["id"] == r)["confidence"] == "confirmed")
+    add(f"- Sibling-рёбер, выведенных из подтверждённых родительских "
+        f"(следствие, а не свидетельство): **{len(_ds_conf)}**"
+        + (f" — {', '.join(_ds_conf)}" if _ds_conf else ""))
     # 🔴 ЗДЕСЬ БЫЛА МЁРТВАЯ СТРОКА, снята 2026-08-09. Она вылавливала число
     # из ТЕКСТА предупреждения «сканов, не отвечающих ни одному источнику»;
     # предупреждение переписали, и витрина стала печатать ноль — молча и всегда.

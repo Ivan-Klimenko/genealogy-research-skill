@@ -786,6 +786,42 @@ check("родитель не становится родителем самом�
           {"id": "x", "as": "subject", "record": 1, "of": None, "disputed": None},
           {"id": "x", "as": "parent", "record": 1, "of": None, "disputed": None}]) == [])
 
+# 18. ERROR_LOG: СЧЁТЧИК КЛАССОВ — ПРОИЗВОДНОЕ, ИМЯ КЛАССА — ОБЯЗАННОСТЬ
+#     🔴 Найдено аудитом 2026-08-18: meta.classes писался рукой и показывал 10
+#     при фактических 24 — в файле, чей главный урок «производное не хранят
+#     руками». А класс err_024 завёл имя под ключом title, и витрина печатала
+#     пустую колонку «Что за приём»: схема расползлась молча, потому что имени
+#     никто не требовал.
+print()
+print("18. error_log: счётчик классов — производное, имя класса — обязанность")
+d = FIX / "minimal"
+_efile = d / "data" / "error_log.yaml"
+_ehad = _efile.read_text() if _efile.is_file() else None
+try:
+    _edoc = {"meta": {"started": "2026-01-01", "classes": 5},
+             "classes": [{"id": "err_001", "name": "", "status": "swept",
+                          "detector": "grep -n 'приём' data/*.yaml",
+                          "contaminated": "прочёсано, чисто", "moves": []}]}
+    _efile.write_text(yaml.dump(_edoc, allow_unicode=True, sort_keys=False))
+    r = run("validate.py", d)
+    _out = r.stdout + r.stderr
+    check("ржавый meta.classes замечен", "meta.classes" in _out, _out[-400:])
+    check("класс без имени — ошибка", "пустой name" in _out, _out[-400:])
+    _edoc["classes"][0]["name"] = "Тестовый приём"
+    _efile.write_text(yaml.dump(_edoc, allow_unicode=True, sort_keys=False))
+    r = run("validate.py", d, "--fix-counters")
+    check("--fix-counters сам чинит classes", "classes 5 → 1" in (r.stdout + r.stderr),
+          (r.stdout + r.stderr)[-400:])
+    r = run("validate.py", d)
+    check("после починки прогон чист", "ОШИБОК НЕТ" in (r.stdout + r.stderr),
+          (r.stdout + r.stderr)[-400:])
+finally:
+    if _ehad is None:
+        if _efile.is_file():
+            _efile.unlink()
+    else:
+        _efile.write_text(_ehad)
+
 # прибираем за собой: сгенерированное в фикстурах не коммитится
 for d in (FIX / "minimal", FIX / "inverted_chain", FIX / "false_identification",
           FIX / "superseded", FIX / "astray_document"):

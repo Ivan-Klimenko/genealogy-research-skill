@@ -1546,12 +1546,32 @@ function stepKind(rel) {
 
 function assumptionsHTML(p) {
   if (p.id === ROOT_ID) return '';
-  const weak = assumptionsFor(p.id);
+  const route = routeToSubject(p.id);
+  const weak = route === null ? null
+    : route.filter(s => (s.rel.confidence || 'confirmed') !== 'confirmed');
+  /* confirmed — не одно и то же, что «стоит на документе»: право на confirmed
+     даёт и живая память (direct_knowledge / family_memory). Читатель должен
+     видеть эту разницу прямо в каскаде, а не раскапывать её по рёбрам:
+     25 подтверждённых связей проекта не имеют ни одного документа. */
+  const memOnly = (route || []).filter(s =>
+    (s.rel.confidence || 'confirmed') === 'confirmed'
+    && !(s.rel.evidence || []).some(e => e.role === 'joint_mention')
+    && (s.rel.evidence || []).some(e =>
+         e.role === 'family_memory' || e.role === 'direct_knowledge'));
+  const memNote = memOnly.length
+    ? `<div class="foot">⚠️ Из подтверждённых связей пути ${memOnly.length} ${
+        plural(memOnly.length, 'держится', 'держатся', 'держатся')} на свидетельстве
+        живой памяти, документа нет: ${memOnly.map(s => esc(s.rel.id)).join(', ')}.</div>`
+    : '';
   if (weak === null) {
     return `<div class="assump"><div class="hd">⚠️ Родство не прослеживается</div>
       Цепочки связей от этого человека до субъекта дерева в графе нет вовсе.</div>`;
   }
   if (!weak.length) {
+    if (memOnly.length) {
+      return `<div class="assump is-solid"><div class="hd">✅ Родство подтверждено на всём пути</div>
+        Слабых связей в цепочке нет, но не всё держит документ.${memNote}</div>`;
+    }
     return `<div class="assump is-solid"><div class="hd">✅ Родство подтверждено на всём пути</div>
       Каждая связь в цепочке до субъекта дерева стоит на документе.</div>`;
   }
@@ -1572,7 +1592,7 @@ function assumptionsHTML(p) {
     <ol>${items}</ol>
     <div class="foot">Цепочка выбрана самая надёжная из возможных: показан путь до субъекта
       дерева с наименьшим числом неподтверждённых связей. Опровергните любую из них —
-      и человек уйдёт из дерева вместе со всеми, кто стоит за ним.</div>
+      и человек уйдёт из дерева вместе со всеми, кто стоит за ним.</div>${memNote}
   </div>`;
 }
 

@@ -640,7 +640,7 @@ python <skill>/scripts/caption_worklist.py list               # что оста�
 
 ## Что читать дальше
 
-- `references/METHODOLOGY.md` — канон пятнадцати правил с разборами и примерами.
+- `references/METHODOLOGY.md` — канон семнадцати правил с разборами и примерами.
 - `references/DATA-MODEL.md` — схема графа, полей и статусов; что проверяет валидатор.
 - `references/HANDOFF.md` — протокол параллельных веток и схема `proposal.yaml`.
 - `references/ARCHIVE-APIS.md` — обходы SPA-интерфейсов архивов и генеалогических баз;
