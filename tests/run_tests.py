@@ -758,6 +758,29 @@ with tempfile.TemporaryDirectory() as tmp:
     check("неизвестный kind — ошибка",
           "неизвестный kind" in (r.stdout + r.stderr), (r.stdout + r.stderr)[-400:])
 
+# 17. НЕВЕРНЫЙ ТИП ПОЛЯ СООБЩАЕТСЯ ОШИБКОЙ, А НЕ РОНЯЕТ ПРОГОН
+#     🔴 Проверено дорого 2026-08-18: `research_wishes` записали списком вместо строки.
+#     Валидатор проверяет тип и даёт ошибку — но ошибки печатаются в конце, а блок
+#     статистики идёт раньше и делал .split() без str(). Прогон падал на AttributeError,
+#     наружу не выходили ни ошибки, ни STATUS.md, и три захода подряд читали усечённый
+#     вывод как «ошибок нет».
+print()
+print("17. Неверный тип поля — ошибка, а не падение прогона")
+d = FIX / "minimal"
+_gfile = d / "data" / "family_graph.yaml"
+_keep = _gfile.read_text()
+try:
+    _gdoc = yaml.safe_load(_keep)
+    _gdoc["people"][0]["research_wishes"] = ["- пункт списком, а не строкой"]
+    _gfile.write_text(yaml.dump(_gdoc, allow_unicode=True, sort_keys=False))
+    r = run("validate.py", d, "--status")
+    _out = r.stdout + r.stderr
+    check("прогон не падает на неверном типе", "AttributeError" not in _out, _out[-400:])
+    check("неверный тип объявлен ошибкой", r.returncode != 0, _out[-400:])
+    check("вывод дошёл до раздела ошибок", "ОШИБК" in _out.upper(), _out[-400:])
+finally:
+    _gfile.write_text(_keep)
+
 check("родитель не становится родителем самому себе",
       folio_lib.claimed_kinship([
           {"id": "x", "as": "subject", "record": 1, "of": None, "disputed": None},

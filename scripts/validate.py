@@ -2272,9 +2272,17 @@ print("Люди по existence:   ", dict(Counter(p.get("existence") for p in pe
 print("Роли документов:     ", dict(Counter(
     e["role"] for p in people for e in (p.get("evidence") or []))))
 print("Связи по confidence: ", dict(Counter(r.get("confidence") for r in rels)))
+# ⚠️ str() ЗДЕСЬ ОБЯЗАТЕЛЕН, И ЭТО НЕ ПЕРЕСТРАХОВКА. Тип `research_wishes` валидатор
+# проверяет выше и на списке даёт ОШИБКУ — но ошибки печатаются в самом конце, а этот
+# блок статистики идёт раньше. Без str() неверный тип не сообщается, а РОНЯЕТ прогон
+# на AttributeError, и ни ошибки, ни STATUS.md наружу не выходят.
+# 🔴 Проверено дорого 2026-08-18: поле записали списком, валидатор молча падал, а заход
+# читал усечённый вывод как «ошибок нет» — трижды подряд. Ронять прогон не должна
+# НИ ОДНА строка статистики: её дело считать, а сообщать о непорядке — дело проверок.
+_wish_text = lambda x: str(x.get("research_wishes") or "")
 print("Больше всего вопросов:", ", ".join(
-    f"{p['id']} ({len([ln for ln in (p.get('research_wishes') or '').split(chr(10)) if ln.strip()])})"
-    for p in sorted(people, key=lambda x: -len((x.get("research_wishes") or "").split("\n")))[:5]))
+    f"{p['id']} ({len([ln for ln in _wish_text(p).split(chr(10)) if ln.strip()])})"
+    for p in sorted(people, key=lambda x: -len(_wish_text(x).split("\n")))[:5]))
 print("Источники по типам:  ", dict(Counter(s["type"] for s in sources["sources"])))
 print("Гипотезы по статусу: ", dict(Counter(h["status"] for h in hyps["hypotheses"])))
 print("Задачи по статусу:   ", dict(Counter(t["status"] for t in tasks)))
