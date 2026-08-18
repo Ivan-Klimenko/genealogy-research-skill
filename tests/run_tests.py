@@ -697,6 +697,53 @@ with tempfile.TemporaryDirectory() as tmp:
     check("приоритет 0 при живой задаче ошибкой НЕ является",
           "ОШИБОК НЕТ" in r.stdout, (r.stdout + r.stderr)[-500:])
 
+print()
+print("16. Организация: цена без единицы тарификации — не знание, а число")
+with tempfile.TemporaryDirectory() as tmp:
+    d = Path(tmp)
+    shutil.copytree(FIX / "minimal", d, dirs_exist_ok=True)
+    mfile = d / "data" / "resource_map.yaml"
+    mdoc = yaml.safe_load(mfile.read_text())
+
+    # ① Учреждение с ценой, но без единицы: «385 ₽» само по себе несравнимо
+    #    ни с чем. Именно на этом проект, из которого вырос навык, три месяца
+    #    считал «второй» архив дорогим: у одного платят за ФАКТ, у другого
+    #    за ГОД ПОИСКА, и разница оказалась в разы.
+    mdoc["organizations"] = [{
+        "id": "test_arch", "name": "Тестовый архив", "kind": "архив",
+        "contacts": "г. N, ул. N, 1", "channel": "письмо",
+        "services": "Генеалогический запрос — 385 ₽.",
+        "last_verified": "2026-08-18"}]
+    mfile.write_text(yaml.dump(mdoc, allow_unicode=True, sort_keys=False))
+    out = "".join(x or "" for x in (lambda r: (r.stdout, r.stderr))(run("validate.py", d)))
+    check("цена без единицы тарификации замечена",
+          "единица тарификации" in out, out[-400:])
+
+    # ② Та же цена с названной единицей претензии не вызывает.
+    mdoc["organizations"][0]["services"] = "Генеалогический запрос — 385 ₽ за 1 позицию (факт)."
+    mfile.write_text(yaml.dump(mdoc, allow_unicode=True, sort_keys=False))
+    out = "".join(x or "" for x in (lambda r: (r.stdout, r.stderr))(run("validate.py", d)))
+    check("цена с единицей претензии не вызывает",
+          "единица тарификации" not in out, out[-400:])
+
+    # ③ 🔴 Пустой адрес — ОШИБКА, а не предупреждение. Учреждение без контактов
+    #    не отличается от отсутствующего, а письмо по неверному адресу
+    #    не возвращается с пометкой: оно пропадает молча на месяц.
+    mdoc["organizations"][0]["contacts"] = ""
+    mfile.write_text(yaml.dump(mdoc, allow_unicode=True, sort_keys=False))
+    r = run("validate.py", d)
+    check("организация без контактов — ошибка",
+          "пустое поле contacts" in (r.stdout + r.stderr), (r.stdout + r.stderr)[-400:])
+
+    # ④ Неизвестный вид учреждения — ошибка: список видов и есть словарь,
+    #    на котором держится сравнимость записей.
+    mdoc["organizations"][0]["contacts"] = "г. N, ул. N, 1"
+    mdoc["organizations"][0]["kind"] = "контора"
+    mfile.write_text(yaml.dump(mdoc, allow_unicode=True, sort_keys=False))
+    r = run("validate.py", d)
+    check("неизвестный kind — ошибка",
+          "неизвестный kind" in (r.stdout + r.stderr), (r.stdout + r.stderr)[-400:])
+
 check("родитель не становится родителем самому себе",
       folio_lib.claimed_kinship([
           {"id": "x", "as": "subject", "record": 1, "of": None, "disputed": None},

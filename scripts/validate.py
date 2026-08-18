@@ -16,6 +16,7 @@ import collections
 import hashlib
 import json
 import re
+import datetime as _dt_org
 import sys
 from collections import Counter, defaultdict, deque
 from pathlib import Path
@@ -781,6 +782,59 @@ if missing_from_map:
 # проекту; дальше каждый проект ведёт свой реестр, и он авторитетный. Обратно
 # в навык ничего не тащим — два дома у одного факта это ржавчина, а не копия.
 PLATFORM_ACCESS = ("curl", "curl_cookiejar", "browser_only", "offline")
+
+# ⭐⭐ ОРГАНИЗАЦИИ — КУДА ОБРАЩАЕТСЯ ЧЕЛОВЕК, а не откуда машина берёт данные.
+# 🔴 Зачем отдельно от platforms. Знание об учреждении — адрес, канал подачи,
+# что оно делает и чего не делает, цена и единица тарификации — оседало
+# в `services` той площадки, что случилась рядом, в шапке того письма, что
+# случилось написать, и в тексте той позиции плана, что случилась завестись.
+# У одного факта было три дома и ни одного хозяина. Итог измерен на живом
+# проекте: адрес одного и того же архива лежал в двух файлах ПО-РАЗНОМУ,
+# и обе записи были неверны. Письмо по такому адресу не возвращается
+# с пометкой — оно просто пропадает на месяц.
+ORG_KINDS = ("архив", "федеральный архив", "ведомственный архив", "ЗАГС",
+             "ведомство", "предприятие", "музей", "сообщество",
+             "предприятие и архивы другого государства")
+_orgs = rmap.get("organizations") or []
+_org_ids = set()
+for og in _orgs:
+    oid_ = og.get("id")
+    if not oid_:
+        errors.append("resource_map/organizations: запись без id")
+        continue
+    if oid_ in _org_ids:
+        errors.append(f"resource_map/organizations: дубликат id {oid_}")
+    _org_ids.add(oid_)
+    if og.get("kind") not in ORG_KINDS:
+        errors.append(f"organization {oid_}: неизвестный kind={og.get('kind')!r} "
+                      f"(допустимы {', '.join(ORG_KINDS)})")
+    for fld in ("name", "contacts", "channel", "last_verified"):
+        if not og.get(fld):
+            errors.append(f"organization {oid_}: пустое поле {fld}")
+    try:
+        _d = _dt_org.date.fromisoformat(str(og.get("last_verified")))
+    except (TypeError, ValueError):
+        errors.append(f"organization {oid_}: last_verified не дата ISO")
+        _d = None
+    # 🔴 Цена без единицы тарификации — не знание, а число. «385 ₽» и «500 ₽»
+    # несравнимы, пока не сказано «за факт» и «за приход-год»; на живом проекте
+    # разница оказалась в разы и в пользу того архива, который считали вторым.
+    _svc = str(og.get("services") or "")
+    if re.search(r"\d\s*(₽|руб)", _svc) and not re.search(
+            r"за\s+1\s|за\s+(лист|факт|год|запрос|дело|образ|документ|персон|объект|"
+            r"позици|селени|приход|церк|файл|поколени)|1\s*(лист|позици|запрос|дело|"
+            r"образ|документ|объект)", _svc):
+        warnings.append(f"organization {oid_}: в services есть цена, но не названа "
+                        "единица тарификации — сравнивать такие числа нельзя")
+    if _d and (_dt_org.date.today() - _d).days > 365:
+        warnings.append(f"organization {oid_}: сведения не проверялись больше года "
+                        "— адреса, цены и правила приёма меняются молча")
+if _orgs:
+    _no_limits = [o["id"] for o in _orgs if not (o.get("limits") or o.get("services"))]
+    if _no_limits:
+        warnings.append("организации без единого слова о том, что они делают "
+                        "и чего не делают: " + ", ".join(_no_limits)
+                        + " — значит, с ними ещё не работали всерьёз")
 _platforms = rmap.get("platforms") or []
 _pf_ids = set()
 for pf in _platforms:

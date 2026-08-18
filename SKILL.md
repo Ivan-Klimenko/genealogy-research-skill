@@ -24,7 +24,8 @@ metadata:
 │   ├── hypotheses.yaml       версии hyp_NNN
 │   ├── research_queue.yaml   задачи task_NNN
 │   ├── error_log.yaml       разбор ошибок по КЛАССАМ (err_NNN)
-│   ├── resource_map.yaml     архивы по эпохам и фамилиям
+│   ├── resource_map.yaml     архивы по эпохам и фамилиям · platforms (как достать
+│   │                         машиной) · organizations (куда пишет человек и почём)
 │   ├── folios.yaml           РЕЕСТР ЛИСТОВ: что на снимке и КТО НА НЁМ НАЗВАН
 │   ├── raw_records/<person>/ ДОСЛОВНЫЕ копии документов
 │   ├── scans/                изображения: originals · family · graves · documents
