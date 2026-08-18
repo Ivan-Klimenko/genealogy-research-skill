@@ -159,7 +159,7 @@ check("продолжения перечисления разобраны как
       f"разобрано только {_got}")
 check("номер дела не тянется через новый фонд",
       "d723_sk007" in _got
-      and (199, 7) not in folio_lib.ref_folios(
+      and (243, 7) not in folio_lib.ref_folios(
           "ф.305 оп.1 д.243 ск.13, ск.196, ск.202; ф.237 оп.73 д.723 ск.7"),
       "ск.7 достался не своему делу — д.243 вместо д.723")
 # и обратное: разбор обязан брать ТОЛЬКО названное. Лист, которого в шифре нет,
@@ -187,7 +187,7 @@ check("неназванный лист не подхвачен и здесь", "
 # прозой, и там встречаются свои числа: «см. src_123», «⚠️ проверить 1878 г.».
 _got = folio_lib.ref_folios("ф.305 оп.1 д.243 ск.13\n⚠️ сверено с src_204, ск.77")
 check("после конца строки и ссылки перечень не продолжается",
-      _got == [(199, 13)], str(_got))
+      _got == [(243, 13)], str(_got))
 
 print("7. Отпечаток прозы не ржавеет из-за YAML-типизации")
 
@@ -876,6 +876,43 @@ with tempfile.TemporaryDirectory() as _td:
         check(f"{_script}: битый YAML — FATAL без стека",
               r.returncode != 0 and "FATAL" in _out and "Traceback" not in _out,
               _out[-300:])
+
+# 21. НАВЫК НЕ ЗНАЕТ СЕМЬИ — И НЕ УЗНАЕТ ВПРЕДЬ
+#     🔴 2026-08-18 репозиторий навыка оказался ПУБЛИЧНЫМ с 69 упоминаниями
+#     настоящих фамилий и селений семьи, из которой он вырос. Всё заменено
+#     вымышленными, история переписана — но разовая чистка без детектора это
+#     «впредь буду внимательнее». Запретный список хранится ХЭШАМИ
+#     (tests/family_denylist.sha1): сами имена в репозиторий не возвращаются,
+#     а генератор списка живёт в приватном репозитории данных.
+#     Нормализация обязана совпадать с генератором: нижний регистр,
+#     е=ё=ѣ, ф=ѳ, и=і, ъ/ь выброшены; сверяются все префиксы токена от 4 знаков.
+print()
+print("21. Навык не знает семьи: запретный список (хэшами)")
+import hashlib
+_deny_file = ROOT / "family_denylist.sha1"
+_deny = {ln.strip() for ln in _deny_file.read_text(encoding="utf-8").splitlines()
+         if ln.strip() and not ln.startswith("#")}
+check("запретный список на месте и непуст", len(_deny) > 10, str(len(_deny)))
+_NORM = str.maketrans({"ё": "е", "ѣ": "е", "ѳ": "ф", "і": "и", "ъ": None, "ь": None})
+_hits = []
+_tok_re = re.compile(r"[А-Яа-яЁёѢѣѲѳІіA-Za-z]{4,}")
+for _f in sorted(ROOT.parent.rglob("*")):
+    if _f.is_dir() or ".git" in _f.parts:
+        continue
+    if _f.suffix not in (".md", ".py", ".yaml", ".txt", ".json", ""):
+        continue
+    try:
+        _txt = _f.read_text(encoding="utf-8")
+    except (UnicodeDecodeError, IsADirectoryError):
+        continue
+    for _tok in set(_tok_re.findall(_txt)):
+        _n = _tok.lower().translate(_NORM)
+        for _ln in range(4, len(_n) + 1):
+            if hashlib.sha1(_n[:_ln].encode()).hexdigest() in _deny:
+                _hits.append(f"{_f.relative_to(ROOT.parent)}: «{_tok}»")
+                break
+check("настоящих имён семьи в навыке нет", not _hits,
+      "; ".join(_hits[:8]) + ("…" if len(_hits) > 8 else ""))
 
 # прибираем за собой: сгенерированное в фикстурах не коммитится
 for d in (FIX / "minimal", FIX / "inverted_chain", FIX / "false_identification",
