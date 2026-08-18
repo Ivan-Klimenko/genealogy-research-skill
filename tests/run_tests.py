@@ -735,7 +735,21 @@ with tempfile.TemporaryDirectory() as tmp:
     check("организация без контактов — ошибка",
           "пустое поле contacts" in (r.stdout + r.stderr), (r.stdout + r.stderr)[-400:])
 
-    # ④ Неизвестный вид учреждения — ошибка: список видов и есть словарь,
+    # ④ У архива и ЗАГСа не записано, кто вправе спрашивать, — предупреждение.
+    #    Норма у каждого вида своя (архивы — 75 лет ч.3 ст.25 ФЗ-125; ЗАГС —
+    #    свой круг лиц; ведомственные хранилища вне правила вовсе), и не записав
+    #    её, заявитель принимает названную учреждением норму на веру.
+    mdoc["organizations"][0]["services"] = "Генеалогический запрос — 385 ₽ за 1 позицию (факт)."
+    mfile.write_text(yaml.dump(mdoc, allow_unicode=True, sort_keys=False))
+    out = "".join(x or "" for x in (lambda r: (r.stdout, r.stderr))(run("validate.py", d)))
+    check("архив без access_rights замечен", "КТО ВПРАВЕ" in out, out[-400:])
+
+    mdoc["organizations"][0]["access_rights"] = "Старше 75 лет — родство не требуется."
+    mfile.write_text(yaml.dump(mdoc, allow_unicode=True, sort_keys=False))
+    out = "".join(x or "" for x in (lambda r: (r.stdout, r.stderr))(run("validate.py", d)))
+    check("записанное право претензии не вызывает", "КТО ВПРАВЕ" not in out, out[-400:])
+
+    # ⑤ Неизвестный вид учреждения — ошибка: список видов и есть словарь,
     #    на котором держится сравнимость записей.
     mdoc["organizations"][0]["contacts"] = "г. N, ул. N, 1"
     mdoc["organizations"][0]["kind"] = "контора"
