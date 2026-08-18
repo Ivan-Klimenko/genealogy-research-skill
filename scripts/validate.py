@@ -24,23 +24,11 @@ from pathlib import Path
 import yaml
 
 def _find_project(start=None):
-    """Корень проекта данных — ближайший предок, где лежит data/family_graph.yaml.
-
-    Скрипт живёт в скилле и переносится между проектами, поэтому привязываться
-    к собственному расположению нельзя. Порядок: переменная окружения
-    GENEALOGY_PROJECT, затем подъём от текущего каталога.
-    """
-    import os
-    env = os.environ.get("GENEALOGY_PROJECT")
-    if env:
-        return Path(env).resolve()
-    here = Path(start or os.getcwd()).resolve()
-    for cand in (here, *here.parents):
-        if (cand / "data" / "family_graph.yaml").exists():
-            return cand
-    raise SystemExit(
-        "не найден проект данных: нет ни GENEALOGY_PROJECT, ни каталога с "
-        "data/family_graph.yaml выше текущего. Запускайте из корня проекта.")
+    """Единственная реализация — scripts/_common.py: одиннадцать копий разошлись (2026-08-18)."""
+    import sys as _sys, pathlib as _pl
+    _sys.path.insert(0, str(_pl.Path(__file__).resolve().parent))
+    from _common import find_project
+    return find_project(start)
 
 BASE = _find_project()               # корень ПРОЕКТА ДАННЫХ, не скилла
 DATA = BASE / "data"                     # YAML-файлы и raw_records/
@@ -48,13 +36,25 @@ errors, warnings = [], []
 
 
 def load(name):
-    p = DATA / name
+    # Чтение и отказы — в _common.load_yaml: до 2026-08-18 битый YAML падал
+    # внятно, а ОТСУТСТВУЮЩИЙ файл — голым FileNotFoundError со стеком.
+    from _common import load_yaml
+    return load_yaml(DATA / name)
+
+
+def write_yaml_text(path, text):
+    """Правки данных идут РЕГУЛЯРКАМИ по сырому тексту (--fix-counters,
+    --stamp-prose, видимость) — блочные скаляры и комментарии пережили бы
+    round-trip через yaml.dump плохо. Обратная сторона: опечатка в шаблоне
+    портила бы главный файл данных МОЛЧА. Поэтому результат парсится ДО записи:
+    битым он на диск не попадает никогда. (Приём caption_worklist, поднят сюда
+    по мета-аудиту 2026-08-18.)"""
     try:
-        with p.open(encoding="utf-8") as f:
-            return yaml.safe_load(f)
+        yaml.safe_load(text)
     except yaml.YAMLError as e:
-        errors.append(f"{name}: YAML не парсится — {e}")
-        sys.exit(f"FATAL: {name} — {e}")
+        sys.exit(f"FATAL: правка {Path(path).name} дала бы битый YAML — на диск "
+                 f"НЕ записана, файл цел. Ошибка шаблона правки: {e}")
+    Path(path).write_text(text, encoding="utf-8")
 
 
 graph = load("family_graph.yaml")
@@ -1977,7 +1977,7 @@ if "--stamp-prose" in sys.argv:
             seg = seg[:bm.start()] + f"  biography_basis: '{val}'\n" + seg[bm.start():]
         gtext = gtext[:a] + seg + gtext[b:]
         stamped.append(p["id"])
-    (BASE / "data" / "family_graph.yaml").write_text(gtext, encoding="utf-8")
+    write_yaml_text(BASE / "data" / "family_graph.yaml", gtext)
     print(f"Отпечаток прозы проставлен: {len(stamped)}")
     for x in stamped:
         print("  ", x)
@@ -2041,7 +2041,7 @@ if "--fix-generations" in sys.argv:
                      gtext[a:b], count=1, flags=re.M)
         gtext = gtext[:a] + seg + gtext[b:]
         moved.append((p["id"], p.get("generation"), want))
-    (BASE / "data" / "family_graph.yaml").write_text(gtext, encoding="utf-8")
+    write_yaml_text(BASE / "data" / "family_graph.yaml", gtext)
     print(f"Поколения пересчитаны: {len(moved)} узлов")
     for pid, was, now in moved:
         print(f"   {pid}: {was} → {now}")
@@ -2121,7 +2121,7 @@ if "--fix-visible" in sys.argv:
                      gtext[a:b], count=1, flags=re.M)
         gtext = gtext[:a] + seg + gtext[b:]
         flipped.append((p["id"], want))
-    (BASE / "data" / "family_graph.yaml").write_text(gtext, encoding="utf-8")
+    write_yaml_text(BASE / "data" / "family_graph.yaml", gtext)
     print(f"Видимость пересчитана: {len(flipped)} узлов")
     for pid, w in flipped:
         print(f"   {pid}: {'на полотно' if w else 'с полотна'}")
@@ -2160,7 +2160,7 @@ if "--fix-counters" in sys.argv:
             tail_changed = True
             fixed.append(f"{fname}: {key} {have} → {want}")
         if tail_changed:
-            path.write_text(text[:lo] + block + text[hi:], encoding="utf-8")
+            write_yaml_text(path, text[:lo] + block + text[hi:])
     print("Счётчики поправлены:" if fixed else "Счётчики и так сходятся — править нечего.")
     for line in fixed:
         print("  ", line)

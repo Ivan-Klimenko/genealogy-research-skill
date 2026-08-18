@@ -93,18 +93,11 @@ IMG_EXT = (".jpg", ".jpeg", ".png")
 
 
 def find_project(start=None):
-    """Корень проекта данных — ближайший предок с data/family_graph.yaml."""
-    env = os.environ.get("GENEALOGY_PROJECT")
-    if env:
-        return pathlib.Path(env).resolve()
-    here = pathlib.Path(start or os.getcwd()).resolve()
-    for cand in (here, *here.parents):
-        if (cand / "data" / "family_graph.yaml").exists():
-            return cand
-    raise SystemExit(
-        "не найден проект данных: нет ни GENEALOGY_PROJECT, ни каталога с "
-        "data/family_graph.yaml выше текущего. Запускайте из корня проекта.")
-
+    """Единственная реализация — scripts/_common.py: одиннадцать копий разошлись (2026-08-18)."""
+    import sys as _sys, pathlib as _pl
+    _sys.path.insert(0, str(_pl.Path(__file__).resolve().parent))
+    from _common import find_project
+    return find_project(start)
 
 # --------------------------------------------------------------------------
 # Реестр листов

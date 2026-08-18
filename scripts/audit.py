@@ -24,29 +24,19 @@ import os, re, sys, yaml, collections, pathlib
 
 
 def _find_project(start=None):
-    """Корень проекта данных — тот же приём, что у validate.py.
-
-    Скрипт живёт в навыке и переносится между проектами, поэтому привязываться
-    к собственному расположению нельзя: сначала GENEALOGY_PROJECT, потом подъём
-    от текущего каталога до ближайшего с data/family_graph.yaml.
-    """
-    env = os.environ.get('GENEALOGY_PROJECT')
-    if env:
-        return pathlib.Path(env).resolve()
-    here = pathlib.Path(start or os.getcwd()).resolve()
-    for cand in (here, *here.parents):
-        if (cand / 'data' / 'family_graph.yaml').exists():
-            return cand
-    raise SystemExit('не найден проект данных: нет ни GENEALOGY_PROJECT, ни каталога '
-                     'с data/family_graph.yaml выше текущего')
-
+    """Единственная реализация — scripts/_common.py: одиннадцать копий разошлись (2026-08-18)."""
+    import sys as _sys, pathlib as _pl
+    _sys.path.insert(0, str(_pl.Path(__file__).resolve().parent))
+    from _common import find_project
+    return find_project(start)
 
 B = _find_project()
 D = B / 'data'
-G = yaml.safe_load((D / 'family_graph.yaml').read_text(encoding='utf-8'))
-S = {s['id']: s for s in yaml.safe_load((D / 'sources.yaml').read_text(encoding='utf-8'))['sources']}
-H = {h['id']: h for h in yaml.safe_load((D / 'hypotheses.yaml').read_text(encoding='utf-8'))['hypotheses']}
-_Q = yaml.safe_load((D / 'research_queue.yaml').read_text(encoding='utf-8')) or {}
+from _common import load_yaml as _load_yaml  # noqa: E402 — sys.path выставлен в _find_project
+G = _load_yaml(D / 'family_graph.yaml')
+S = {s['id']: s for s in _load_yaml(D / 'sources.yaml')['sources']}
+H = {h['id']: h for h in _load_yaml(D / 'hypotheses.yaml')['hypotheses']}
+_Q = _load_yaml(D / 'research_queue.yaml') or {}
 # ⚠️ Ключ очереди у проектов РАЗНЫЙ: `queue` в проекте, из которого вырос навык,
 # и `tasks` у всякого, заведённого `init_project.py`. Валидатор давно читает оба,
 # аудит читал только первый и падал на любом новом проекте с KeyError — то есть
@@ -593,7 +583,13 @@ def _roots(name):
 # Кластер же — это имена ОДНОГО места, и только их пропуск сужает охват.
 try:
     _rm = yaml.safe_load((D / 'resource_map.yaml').read_text(encoding='utf-8')) or {}
-except Exception:
+except FileNotFoundError:
+    _rm = {}                # карты может не быть — это законно у нового проекта
+except Exception as _e:
+    # 🔴 Битая карта — НЕ то же, что отсутствующая: молча продолжив без неё,
+    # признак 21 перестал бы видеть кластеры имён — и выглядел бы как прошедший.
+    # «Валидатор трижды падал молча» (err_024) — ровно такой сценарий.
+    print(f"⚠️  resource_map.yaml не прочитан ({_e}) — признак кластеров ослеп")
     _rm = {}
 VILLAGES = {}          # кластер → [(имя, нижний регистр), …]
 for _cid, _c in (_rm.get('village_aliases') or {}).items():
@@ -855,8 +851,12 @@ if CAPT:
                 if _miss:
                     findings['24. номер записи в пересказе не значится на этом листе'
                              ].append(f"{_s.get('id')} · {_st}: №{_miss} ∉ {sorted(_recs)}")
-    except Exception as _e:            # реестра нет или он иной схемы — признак молчит
-        pass
+    except Exception as _e:
+        # 🔴 Признак сломан — об этом ГОВОРИТСЯ, а не молчится: тихий отказ
+        # неотличим от «проверено, чисто» (класс err_024). Реестр иной схемы —
+        # законная причина, но читатель прогона обязан её видеть.
+        print(f"⚠️  признак 24 не отработал ({type(_e).__name__}: {_e}) — "
+              f"пересказы против реестра листов в этом прогоне НЕ проверены")
 
 print('=' * 70)
 for k in sorted(findings):

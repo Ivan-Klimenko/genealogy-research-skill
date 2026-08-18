@@ -48,18 +48,16 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 
 
 def _project(start=None):
-    env = os.environ.get('GENEALOGY_PROJECT')
-    if env:
-        return os.path.abspath(env)
-    here = os.path.abspath(start or os.getcwd())
-    while True:
-        if os.path.exists(os.path.join(here, 'data', 'family_graph.yaml')):
-            return here
-        nxt = os.path.dirname(here)
-        if nxt == here:
-            return os.path.dirname(HERE)
-        here = nxt
-
+    """Делегирует scripts/_common.py; ФОЛБЭК СОХРАНЁН: вне всякого проекта скрипт
+    работает от корня навыка — это его историческая семантика, а не недосмотр
+    (сетевому инструменту случается жить без данных под рукой)."""
+    import sys as _sys
+    _sys.path.insert(0, HERE)
+    try:
+        from _common import find_project
+        return str(find_project(start))
+    except SystemExit:
+        return os.path.dirname(HERE)
 
 PROJECT = _project()
 MARKUP = os.path.join(PROJECT, 'data', '.yandex_markup')

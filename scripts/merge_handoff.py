@@ -39,23 +39,11 @@ from pathlib import Path
 import yaml
 
 def _find_project(start=None):
-    """Корень проекта данных — ближайший предок, где лежит data/family_graph.yaml.
-
-    Скрипт живёт в скилле и переносится между проектами, поэтому привязываться
-    к собственному расположению нельзя. Порядок: переменная окружения
-    GENEALOGY_PROJECT, затем подъём от текущего каталога.
-    """
-    import os
-    env = os.environ.get("GENEALOGY_PROJECT")
-    if env:
-        return Path(env).resolve()
-    here = Path(start or os.getcwd()).resolve()
-    for cand in (here, *here.parents):
-        if (cand / "data" / "family_graph.yaml").exists():
-            return cand
-    raise SystemExit(
-        "не найден проект данных: нет ни GENEALOGY_PROJECT, ни каталога с "
-        "data/family_graph.yaml выше текущего. Запускайте из корня проекта.")
+    """Единственная реализация — scripts/_common.py: одиннадцать копий разошлись (2026-08-18)."""
+    import sys as _sys, pathlib as _pl
+    _sys.path.insert(0, str(_pl.Path(__file__).resolve().parent))
+    from _common import find_project
+    return find_project(start)
 
 BASE = _find_project()
 DATA = BASE / "data"

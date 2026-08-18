@@ -27,23 +27,11 @@ from pathlib import Path
 # --------------------------------------------------------------------------
 
 def _find_project(start=None):
-    """Корень проекта данных — ближайший предок, где лежит data/family_graph.yaml.
-
-    Скрипт живёт в скилле и переносится между проектами, поэтому привязываться
-    к собственному расположению нельзя. Порядок: переменная окружения
-    GENEALOGY_PROJECT, затем подъём от текущего каталога.
-    """
-    import os
-    env = os.environ.get("GENEALOGY_PROJECT")
-    if env:
-        return Path(env).resolve()
-    here = Path(start or os.getcwd()).resolve()
-    for cand in (here, *here.parents):
-        if (cand / "data" / "family_graph.yaml").exists():
-            return cand
-    raise SystemExit(
-        "не найден проект данных: нет ни GENEALOGY_PROJECT, ни каталога с "
-        "data/family_graph.yaml выше текущего. Запускайте из корня проекта.")
+    """Единственная реализация — scripts/_common.py: одиннадцать копий разошлись (2026-08-18)."""
+    import sys as _sys, pathlib as _pl
+    _sys.path.insert(0, str(_pl.Path(__file__).resolve().parent))
+    from _common import find_project
+    return find_project(start)
 
 project_root = _find_project()
 data_dir = project_root / 'data'
@@ -55,9 +43,9 @@ output_path = project_root / 'web' / 'index.html'
 # --------------------------------------------------------------------------
 
 def load_yaml(path: Path):
-    """Read one UTF-8 YAML document."""
-    with open(path, encoding='utf-8') as f:
-        return yaml.safe_load(f)
+    """Read one UTF-8 YAML document; missing/broken files exit with a message."""
+    from _common import load_yaml as _load
+    return _load(path)
 
 
 graph = load_yaml(data_dir / 'family_graph.yaml')
@@ -898,7 +886,7 @@ function mentionsOf(pid) {
    where a person can be reached two ways — say through a documented mother and
    an assumed father — because then the honest answer is the better route.      */
 
-const ROOT_ID = (GRAPH_DATA.meta && GRAPH_DATA.meta.root) || 'ivan_klimenko';
+const ROOT_ID = (GRAPH_DATA.meta || {}).root;  // meta.root обязателен — фолбэк на id чужого проекта тут молча красил не того (снят 2026-08-18)
 
 const kinOf = {};   // person -> [{to, rel}] over every relationship type
 for (const r of RELS) {

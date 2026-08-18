@@ -31,25 +31,16 @@ ROOT = os.path.dirname(HERE)
 
 
 def _project(start=None):
-    """Каталог ПРОЕКТА данных, а не навыка.
-
-    Куки, кэши и сканы — данные конкретной семьи, они живут в проекте. Скрипт
-    же лежит в навыке, общем для всех проектов. Пока путь считался от навыка,
-    скрипт искал `data/.yandex_cookie.txt` внутри `~/.claude/skills/...` — то есть
-    там, где данных нет и быть не должно. Найдено 2026-08-04 на живой задаче.
-    """
-    env = os.environ.get('GENEALOGY_PROJECT')
-    if env:
-        return os.path.abspath(env)
-    here = os.path.abspath(os.getcwd())
-    while True:
-        if os.path.exists(os.path.join(here, 'data', 'family_graph.yaml')):
-            return here
-        nxt = os.path.dirname(here)
-        if nxt == here:
-            return ROOT
-        here = nxt
-
+    """Делегирует scripts/_common.py; ФОЛБЭК СОХРАНЁН: вне всякого проекта скрипт
+    работает от корня навыка — это его историческая семантика, а не недосмотр
+    (сетевому инструменту случается жить без данных под рукой)."""
+    import sys as _sys
+    _sys.path.insert(0, HERE)
+    try:
+        from _common import find_project
+        return str(find_project(start))
+    except SystemExit:
+        return ROOT
 
 PROJECT = _project()
 COOKIE_FILE = os.environ.get('YA_COOKIE_FILE',

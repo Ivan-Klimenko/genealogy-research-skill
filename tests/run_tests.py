@@ -822,6 +822,61 @@ finally:
     else:
         _efile.write_text(_ehad)
 
+# 19. ГЕНЕРАТОР СТРАНИЦЫ ПРОВЕРЯЕТСЯ ПО СОДЕРЖИМОМУ, А НЕ ПО ФАКТУ ФАЙЛА
+#     🔴 До 2026-08-18 самый большой скрипт навыка (2300+ строк, из них ~2000 —
+#     JS в строке-шаблоне) был покрыт только смоуком «index.html существует»:
+#     сломанный селектор, потерянный каскад или битый JSON прошли бы мимо.
+#     Здесь же — регрессии двух настоящих ошибок: хардкод id корня в isSubject
+#     (на чужом проекте субъект молча терял акцент) и полные даты рождения
+#     живых в исходнике страницы (visible: false прятал только с полотна).
+print()
+print("19. generate_tree: содержимое страницы, а не факт файла")
+d = FIX / "minimal"
+r = run("generate_tree.py", d)
+check("генерация прошла", r.returncode == 0, r.stderr[-400:])
+_html = (d / "web" / "index.html").read_text(encoding="utf-8")
+check("корень назван на странице", "Иванов Иван" in _html)
+_mg = re.search(r"const GRAPH_DATA = (.*?);\n", _html)
+check("GRAPH_DATA — валидный JSON",
+      bool(_mg) and isinstance(json.loads(_mg.group(1).replace("<\\/", "</")), dict),
+      "не найден или не парсится")
+check("субъект ищется по ROOT_ID, а не по захардкоженному id",
+      "p.id === ROOT_ID" in _html and "ivan_klimenko'" not in _html)
+check("полной даты рождения живого на странице НЕТ", "1980-01-01" not in _html)
+check("год рождения живого на странице есть",
+      bool(_mg) and any(p.get("birth_date") == "1980"
+                        for p in json.loads(_mg.group(1).replace("<\\/", "</"))["people"]))
+check("каскад допущений в шаблоне", "Каскад допущений" in _html)
+
+# 20. ОТКАЗ — ВНЯТНОЙ СТРОКОЙ, А НЕ СТЕКОМ
+#     🔴 «Плохое знакомство — когда первый прогон падает» — падение голым
+#     Traceback на отсутствующем файле было ровно таким: validate ловил только
+#     YAMLError, generate_tree и audit не ловили ничего. Теперь чтение — в
+#     _common.load_yaml, и оба отказа (нет файла, битый YAML) обязаны быть
+#     сообщением с FATAL, без стека.
+print()
+print("20. Отсутствующий файл и битый YAML — сообщение, а не стек")
+with tempfile.TemporaryDirectory() as _td:
+    _p = Path(_td) / "proj"
+    shutil.copytree(FIX / "minimal", _p)
+    (_p / "data" / "sources.yaml").unlink()
+    for _script in ("validate.py", "generate_tree.py"):
+        r = run(_script, _p)
+        _out = r.stdout + r.stderr
+        check(f"{_script}: нет файла — FATAL без стека",
+              r.returncode != 0 and "FATAL" in _out and "Traceback" not in _out,
+              _out[-300:])
+with tempfile.TemporaryDirectory() as _td:
+    _p = Path(_td) / "proj"
+    shutil.copytree(FIX / "minimal", _p)
+    (_p / "data" / "hypotheses.yaml").write_text("hypotheses:\n  - {broken\n", encoding="utf-8")
+    for _script in ("validate.py", "generate_tree.py"):
+        r = run(_script, _p)
+        _out = r.stdout + r.stderr
+        check(f"{_script}: битый YAML — FATAL без стека",
+              r.returncode != 0 and "FATAL" in _out and "Traceback" not in _out,
+              _out[-300:])
+
 # прибираем за собой: сгенерированное в фикстурах не коммитится
 for d in (FIX / "minimal", FIX / "inverted_chain", FIX / "false_identification",
           FIX / "superseded", FIX / "astray_document"):
